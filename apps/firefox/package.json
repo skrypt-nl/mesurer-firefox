@@ -1,0 +1,24 @@
+{
+  "name": "mesurer-firefox",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup && node scripts/generate-manifest.mjs",
+    "package": "pnpm build && web-ext build --source-dir dist --artifacts-dir artifacts --overwrite-dest",
+    "lint:ext": "pnpm build && web-ext lint --source-dir dist",
+    "start": "web-ext run --source-dir dist"
+  },
+  "dependencies": {
+    "mesurer": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.24",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "web-ext": "^8.10.0"
+  }
+}
