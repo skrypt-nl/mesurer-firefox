@@ -1,5 +1,29 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: optional;
+  src: url("/inter-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: optional;
+  src: url("/ibm-plex-mono-400-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: optional;
+  src: url("/ibm-plex-mono-500-latin.woff2") format("woff2");
+}
+
 @theme {
   --color-bg: var(--color-bg);
   --color-strong: var(--color-strong);
@@ -18,6 +42,7 @@
   --color-muted: #888888;
   --color-subtle: #f0f0f0;
   --color-border: #ededed;
+  --radius: 4px;
 }
 
 html {
@@ -43,11 +68,72 @@ html::selection {
   font-family: var(--font-mono);
   background: var(--color-subtle);
   color: var(--color-strong);
-  border-radius: 2px;
+  border-radius: var(--radius);
   padding: 1px 4px;
   font-size: 13px;
 }
 
 * {
   box-sizing: border-box;
+}
+
+@keyframes mesurer-digit-reel {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(0, var(--mesurer-digit-offset), 0);
+  }
+}
+
+.mesurer-digit-reel {
+  animation: mesurer-digit-reel 1s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesurer-digit-reel {
+    animation: none;
+    transform: translate3d(0, var(--mesurer-digit-offset), 0);
+  }
+}
+
+img {
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* The hue slider of the color picker: every hue across the track, under a round thumb. */
+.tool-hue {
+  width: 100%;
+  height: 14px;
+  margin: 0;
+  border-radius: 999px;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.tool-hue::-webkit-slider-thumb {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 30%), 0 1px 3px rgb(0 0 0 / 30%);
+  -webkit-appearance: none;
+}
+
+.tool-hue::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 30%), 0 1px 3px rgb(0 0 0 / 30%);
+}
+
+.tool-hue:focus-visible {
+  outline: 2px solid var(--color-strong);
+  outline-offset: 3px;
 }

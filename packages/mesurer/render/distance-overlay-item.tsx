@@ -1,8 +1,10 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useRef, type PointerEvent } from "react";
 import { MeasureTag } from "../components/measure-tag";
+import { getPinnedLabelPoint, isElementRect } from "../core/distances";
 import type { DistanceOverlay } from "../core/types";
+import { ownFrameScale } from "../core/document-tree";
 import { formatValue } from "../core/utils";
 
 type DistanceOverlayItemProps = {
@@ -16,38 +18,56 @@ export const DistanceOverlayItem = memo(function DistanceOverlayItem({
   labelOffset,
   onRemove,
 }: DistanceOverlayItemProps) {
+  const showRectA = isElementRect(distance.rectA);
+  const showRectB = isElementRect(distance.rectB);
+  const pinPoint = getPinnedLabelPoint(distance);
+  // In a responsive preview drawn smaller than it is, a distance is told as the page has it there.
+  const drawn = ownFrameScale(distance.elementRefA ?? distance.elementRefB);
+  // A pin is created under a stationary cursor, so it only becomes removable
+  // once the pointer has actually moved onto its label. Without this the click
+  // that places the next guide would land on the fresh label and delete it.
+  const armedRef = useRef(false);
+  const arm = onRemove
+    ? () => {
+        armedRef.current = true;
+      }
+    : undefined;
+  const handleRemove = onRemove
+    ? (event: PointerEvent<HTMLDivElement>) => {
+        if (event.button !== 0 || !armedRef.current) return;
+        event.stopPropagation();
+        onRemove(distance.id);
+      }
+    : undefined;
+
   return (
     <div
-      className={
-        onRemove ? "msr:pointer-events-auto" : "msr:pointer-events-none"
-      }
-      onClick={
-        onRemove
-          ? (event) => {
-              event.stopPropagation();
-              onRemove(distance.id);
-            }
-          : undefined
-      }
+      data-mesurer-held-distance={onRemove ? distance.id : undefined}
+      data-mesurer-live-distance={onRemove ? undefined : ""}
+      className="msr:pointer-events-none"
     >
-      <div
-        className="msr:absolute msr:rounded msr:border msr:border-[#2563eb]/70"
-        style={{
-          left: distance.rectA.left,
-          top: distance.rectA.top,
-          width: distance.rectA.width,
-          height: distance.rectA.height,
-        }}
-      />
-      <div
-        className="msr:absolute msr:rounded msr:border msr:border-[#2563eb]/70"
-        style={{
-          left: distance.rectB.left,
-          top: distance.rectB.top,
-          width: distance.rectB.width,
-          height: distance.rectB.height,
-        }}
-      />
+      {showRectA ? (
+        <div
+          className="msr:absolute msr:rounded msr:border msr:border-[#2563eb]/70"
+          style={{
+            left: distance.rectA.left,
+            top: distance.rectA.top,
+            width: distance.rectA.width,
+            height: distance.rectA.height,
+          }}
+        />
+      ) : null}
+      {showRectB ? (
+        <div
+          className="msr:absolute msr:rounded msr:border msr:border-[#2563eb]/70"
+          style={{
+            left: distance.rectB.left,
+            top: distance.rectB.top,
+            width: distance.rectB.width,
+            height: distance.rectB.height,
+          }}
+        />
+      ) : null}
       {distance.connectors.map((connector, index) =>
         Math.abs(connector.x1 - connector.x2) < 1 ? (
           <div
@@ -71,48 +91,62 @@ export const DistanceOverlayItem = memo(function DistanceOverlayItem({
           />
         ),
       )}
-      {distance.horizontal && distance.horizontal.value > 0 ? (
-        <>
-          <div
-            className="msr:absolute msr:h-px msr:bg-[#2563eb]"
-            style={{
-              left: Math.min(distance.horizontal.x1, distance.horizontal.x2),
-              width: Math.abs(distance.horizontal.x2 - distance.horizontal.x1),
-              top: distance.horizontal.y,
-            }}
-          />
-          <MeasureTag
-            className="msr:-translate-x-1/2 msr:bg-ink-900/90"
-            style={{
-              left: (distance.horizontal.x1 + distance.horizontal.x2) / 2,
-              top: distance.horizontal.y + labelOffset,
-            }}
-          >
-            {formatValue(distance.horizontal.value)}
-          </MeasureTag>
-        </>
-      ) : null}
-      {distance.vertical && distance.vertical.value > 0 ? (
-        <>
-          <div
-            className="msr:absolute msr:w-px msr:bg-[#2563eb]"
-            style={{
-              top: Math.min(distance.vertical.y1, distance.vertical.y2),
-              height: Math.abs(distance.vertical.y2 - distance.vertical.y1),
-              left: distance.vertical.x,
-            }}
-          />
-          <MeasureTag
-            className="msr:-translate-y-1/2 msr:bg-ink-900/90"
-            style={{
-              left: distance.vertical.x + labelOffset,
-              top: (distance.vertical.y1 + distance.vertical.y2) / 2,
-            }}
-          >
-            {formatValue(distance.vertical.value)}
-          </MeasureTag>
-        </>
-      ) : null}
+      {([distance.horizontal, ...(distance.extraHorizontals ?? [])]).map(
+        (segment, index) =>
+          segment && segment.value > 0 ? (
+            <div key={`${distance.id}-h-${index}`}>
+              <div
+                className="msr:absolute msr:h-px msr:bg-[#2563eb]"
+                style={{
+                  left: Math.min(segment.x1, segment.x2),
+                  width: Math.abs(segment.x2 - segment.x1),
+                  top: segment.y,
+                }}
+              />
+              <MeasureTag
+                className="msr:-translate-x-1/2 msr:bg-ink-900/90 msr:dark:bg-black/90 msr:dark:text-white"
+                interactive={Boolean(onRemove)}
+                style={{
+                  left:
+                    pinPoint?.x ?? (segment.x1 + segment.x2) / 2,
+                  top: segment.y + labelOffset,
+                }}
+                onPointerEnter={arm}
+                onPointerDown={handleRemove}
+              >
+                {formatValue(segment.value / drawn)}
+              </MeasureTag>
+            </div>
+          ) : null,
+      )}
+      {([distance.vertical, ...(distance.extraVerticals ?? [])]).map(
+        (segment, index) =>
+          segment && segment.value > 0 ? (
+            <div key={`${distance.id}-v-${index}`}>
+              <div
+                className="msr:absolute msr:w-px msr:bg-[#2563eb]"
+                style={{
+                  top: Math.min(segment.y1, segment.y2),
+                  height: Math.abs(segment.y2 - segment.y1),
+                  left: segment.x,
+                }}
+              />
+              <MeasureTag
+                className="msr:-translate-y-1/2 msr:bg-ink-900/90 msr:dark:bg-black/90 msr:dark:text-white"
+                interactive={Boolean(onRemove)}
+                style={{
+                  left: segment.x + labelOffset,
+                  top:
+                    pinPoint?.y ?? (segment.y1 + segment.y2) / 2,
+                }}
+                onPointerEnter={arm}
+                onPointerDown={handleRemove}
+              >
+                {formatValue(segment.value / drawn)}
+              </MeasureTag>
+            </div>
+          ) : null,
+      )}
     </div>
   );
 });

@@ -1,6 +1,8 @@
 import { GUIDE_SNAP_DISTANCE } from "./constants"
 import { getDistanceOverlay } from "./distances"
 import { getRectFromDom } from "./dom"
+import { projectRect } from "./frame-geometry"
+import { getPaddingBoxRect } from "./geometry"
 import { getGuideDistance, getGuideRect } from "./guides"
 import type { Guide, InspectMeasurement, OptionTarget, Point } from "./types"
 
@@ -35,10 +37,9 @@ export const getOptionPairOverlay = (params: {
   primarySelectedMeasurement: InspectMeasurement | null
   selectedGuide: Guide | null
   hoverGuide: Guide | null
-  hoverElement: HTMLElement | null
-  selectedElementRef: HTMLElement | null
+  hoverElement: Element | null
+  selectedElementRef: Element | null
 }) => {
-  const ownerDocument = params.document ?? document
   const ownerWindow = params.window ?? window
   if (!params.altPressed) return null
   if (!params.selectedGuide && !params.primarySelectedMeasurement) return null
@@ -51,7 +52,7 @@ export const getOptionPairOverlay = (params: {
 
   const selectedTarget: OptionTarget | null = params.selectedGuide
     ? {
-        rect: getGuideRect(params.selectedGuide),
+        rect: getGuideRect(params.selectedGuide, ownerWindow),
         guideId: params.selectedGuide.id,
       }
     : selectedElement && primary
@@ -61,8 +62,13 @@ export const getOptionPairOverlay = (params: {
         }
       : null
 
-  const hoverTarget: OptionTarget | null = params.hoverGuide
-    ? { rect: getGuideRect(params.hoverGuide), guideId: params.hoverGuide.id }
+  const hoverGuide =
+    params.hoverGuide && params.hoverGuide.id !== params.selectedGuide?.id
+      ? params.hoverGuide
+      : null
+
+  const hoverTarget: OptionTarget | null = hoverGuide
+    ? { rect: getGuideRect(hoverGuide, ownerWindow), guideId: hoverGuide.id }
     : params.hoverElement
       ? {
           rect: getRectFromDom(params.hoverElement),
@@ -90,13 +96,46 @@ export const getOptionPairOverlay = (params: {
     return null
   }
 
-  return getDistanceOverlay(
-    selectedTarget.rect,
-    hoverTarget.rect,
-    selectedTarget.element ?? null,
-    hoverTarget.element ?? null,
-    ownerWindow
-  )
+  const guideIds = [selectedTarget.guideId ?? null, hoverTarget.guideId ?? null]
+  return {
+    ...getDistanceOverlay(
+      selectedTarget.rect,
+      hoverTarget.rect,
+      selectedTarget.element ?? null,
+      hoverTarget.element ?? null,
+      ownerWindow,
+    ),
+    ...(guideIds.some(Boolean) ? { guideIds } : {}),
+  }
+}
+
+const containerForSelection = (
+  measurement: InspectMeasurement,
+  selectedElement: Element | null,
+  hoverElement: Element | null,
+) => {
+  if (measurement.textAnchor && selectedElement) return selectedElement
+
+  const layout = measurement.layoutSpacingElementRef
+  if (
+    layout &&
+    selectedElement &&
+    layout !== selectedElement &&
+    layout.contains(selectedElement)
+  ) {
+    return layout
+  }
+
+  let containerElement: Element | null = selectedElement?.parentElement ?? null
+  if (
+    selectedElement &&
+    hoverElement &&
+    hoverElement !== selectedElement &&
+    hoverElement.contains(selectedElement)
+  ) {
+    containerElement = hoverElement
+  }
+  return containerElement
 }
 
 export const getOptionContainerLines = (params: {
@@ -104,43 +143,34 @@ export const getOptionContainerLines = (params: {
   window?: Window
   altPressed: boolean
   primarySelectedMeasurement: InspectMeasurement | null
-  optionPairOverlay: ReturnType<typeof getDistanceOverlay> | null
   selectedGuideIds: string[]
-  selectedElement: HTMLElement | null
-  hoverElement: HTMLElement | null
+  selectedElement: Element | null
+  hoverElement: Element | null
 }) => {
   const ownerDocument = params.document ?? document
   const ownerWindow = params.window ?? window
-  if (
-    !params.altPressed ||
-    !params.primarySelectedMeasurement ||
-    params.optionPairOverlay
-  )
-    return null
+  if (!params.altPressed || !params.primarySelectedMeasurement) return null
   if (params.selectedGuideIds.length > 0) return null
 
-  let containerElement: HTMLElement | null =
-    params.selectedElement?.parentElement ?? null
-  if (
-    params.selectedElement &&
-    params.hoverElement &&
-    params.hoverElement !== params.selectedElement &&
-    params.hoverElement.contains(params.selectedElement)
-  ) {
-    containerElement = params.hoverElement
-  }
+  const containerElement = containerForSelection(
+    params.primarySelectedMeasurement,
+    params.selectedElement,
+    params.hoverElement,
+  )
 
+  // With no container but the page, the lines run to the edges of the window the element is in:
+  // for one in a frame that is the frame, not the window around it.
+  const elementDocument = params.selectedElement?.ownerDocument ?? ownerDocument
+  const elementWindow = elementDocument.defaultView ?? ownerWindow
   const containerRect =
     containerElement &&
-    containerElement !== ownerDocument.body &&
-    containerElement !== ownerDocument.documentElement
-      ? getRectFromDom(containerElement)
-      : {
-          left: 0,
-          top: 0,
-          width: ownerWindow.innerWidth,
-          height: ownerWindow.innerHeight,
-        }
+    containerElement !== elementDocument.body &&
+    containerElement !== elementDocument.documentElement
+      ? getPaddingBoxRect(getRectFromDom(containerElement), containerElement, ownerWindow)
+      : projectRect(
+          { left: 0, top: 0, width: elementWindow.innerWidth, height: elementWindow.innerHeight },
+          elementDocument,
+        )
 
   const rect = params.primarySelectedMeasurement.rect
   const right = rect.left + rect.width

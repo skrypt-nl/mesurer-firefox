@@ -1,0 +1,526 @@
+import { expect, test } from "@playwright/test";
+
+test("loads the stress bench at both slash variants", async ({ page }) => {
+  for (const path of ["/bench", "/bench/"]) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { name: "Test every edge case." })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "UI Skills opening section" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Inspector edge-case lab" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "CLI card lookalike" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Test the four viewport corners" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Animated targets" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sticky header and overlapping cards" })).toBeVisible();
+    await expect(page.getByTitle("Complex embedded application")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Comments (M)" })).toBeVisible();
+  }
+});
+
+test("CLI card fixture keeps its dense controls functional", async ({ page }) => {
+  await page.goto("/bench");
+
+  await page.getByRole("button", { name: /skills init --preset interface/ }).dispatchEvent("click");
+  await expect(page.getByText("output / 02")).toBeVisible();
+  await page.getByRole("button", { name: "Copy selected command" }).dispatchEvent("click");
+  await expect(page.getByRole("button", { name: "Copy selected command" })).toHaveText("copied");
+
+  const input = page.getByRole("textbox", { name: "CLI command input" });
+  await input.evaluate((element) => {
+    if (!(element instanceof HTMLInputElement)) return;
+    element.value = "skills check --target ./bench";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await expect(input).toHaveValue("skills check --target ./bench");
+});
+
+test("UI Skills opening fixture keeps both reference cards inspectable", async ({ page }) => {
+  await page.goto("/bench");
+
+  await expect(page.getByRole("heading", { name: "Curated skills for design engineering" })).toBeVisible();
+  await expect(page.getByText("Run the UI Skills CLI from your terminal.")).toBeVisible();
+  await expect(page.getByText("Connect your agent to the UI Skills catalog.")).toBeVisible();
+  await page.getByRole("button", { name: "Copy command" }).dispatchEvent("click");
+  await expect(page.locator('[data-card-href="/cli"] [data-copy-icon="check"]')).toBeVisible();
+  await expect(page.locator('a[aria-label="Open CLI installation guide"]')).toHaveAttribute("href", "/cli");
+  await expect(page.locator('a[aria-label="Open MCP installation guide"]')).toHaveAttribute("href", "/mcp/docs");
+});
+
+test("inspect resolves text inside a pointer-transparent card description", async ({ page }) => {
+  await page.goto("/bench");
+  const target = page.getByText("CLI", { exact: true });
+  await target.scrollIntoViewIfNeeded();
+  const box = await target.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(point.x, point.y);
+  await expect(page.locator("[data-mesurer-hover='true']")).toBeVisible();
+  await page.mouse.click(point.x, point.y);
+  await expect(page.locator("[data-mesurer-selected-measurement]")).toHaveCount(1);
+  await expect(page.locator("[data-mesurer-inspect-selector]")).toHaveAttribute("title", /div:nth-of-type\(1\)/);
+});
+
+test("inspect resolves every UI Skills card target to its visual bounds", async ({ page }) => {
+  test.setTimeout(20_000);
+  const targets: Array<{
+    name: string;
+    selector: string;
+    selectionSelector?: string;
+    inspectSelector?: RegExp;
+    point?: (box: { x: number; y: number; width: number; height: number }) => { x: number; y: number };
+    tolerance?: number;
+  }> = [
+    { name: "CLI text", selector: '[data-card-href="/cli"] .bench-uiskills-card-description div:first-child' },
+    { name: "CLI card link", selector: 'a[aria-label="Open CLI installation guide"]' },
+    { name: "CLI command row", selector: '[data-command-row="npx ui-skills"]' },
+    { name: "CLI copy button", selector: '[data-card-href="/cli"] button[aria-label="Copy command"]', point: (box) => ({ x: box.x + 2, y: box.y + 2 }) },
+    // Icon hover is glyph-sized; committing a composite control selects its button.
+    { name: "CLI copy icon", selector: '[data-card-href="/cli"] button[aria-label="Copy command"] svg', selectionSelector: '[data-card-href="/cli"] button[aria-label="Copy command"]', inspectSelector: /button/, point: (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 }), tolerance: 6 },
+    { name: "MCP text", selector: '[data-card-href="/mcp/docs"] .bench-uiskills-card-description div:first-child' },
+    { name: "MCP logo", selector: '[data-card-href="/mcp/docs"] .bench-uiskills-agent-track-inner img' },
+    {
+      name: "DeepMind video card title",
+      selector: '#carousel-6fc272a2-263f-4f78-8994-a81f68e3ebbf > div:nth-of-type(2) > div > div:nth-of-type(1) > article > div.card__inner h3.card__title',
+      inspectSelector: /h3/,
+    },
+    { name: "deep image overlay title", selector: '[data-testid="deep-image-title"]', inspectSelector: /h3/ },
+    { name: "non-text transparent SVG mark", selector: '[data-testid="transparent-overlay-mark"]', inspectSelector: /circle/ },
+    { name: "media painted above transparent text", selector: '[data-testid="paint-order-source"]', inspectSelector: /canvas/ },
+    { name: "media below clipped overlay bounds", selector: '[data-testid="clipped-overlay-source"]', inspectSelector: /canvas/ },
+    { name: "highest transparent stacking layer", selector: '[data-testid="top-transparent-title"]', inspectSelector: /h3/ },
+  ]
+
+  for (const targetCase of targets) {
+    await page.goto("/bench");
+    const target = page.locator(targetCase.selector).first();
+    await expect(target, targetCase.name).toBeVisible();
+    await target.scrollIntoViewIfNeeded();
+    const box = await target.boundingBox();
+    expect(box, targetCase.name).not.toBeNull();
+    if (!box) continue;
+
+    const point = targetCase.point?.(box) ?? { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await page.mouse.move(point.x, point.y);
+    const hover = page.locator("[data-mesurer-hover='true']");
+    await expect(hover, `${targetCase.name} hover`).toBeVisible();
+    await expect.poll(async () => {
+      const hoverBox = await hover.boundingBox();
+      if (!hoverBox) return Number.POSITIVE_INFINITY;
+      return Math.max(Math.abs(hoverBox.x - box.x), Math.abs(hoverBox.y - box.y), Math.abs(hoverBox.width - box.width), Math.abs(hoverBox.height - box.height));
+    }, { message: `${targetCase.name} hover bounds` }).toBeLessThan(targetCase.tolerance ?? 3);
+
+    await page.mouse.click(point.x, point.y);
+    if (targetCase.inspectSelector) {
+      await expect(page.locator("[data-mesurer-inspect-selector]"), `${targetCase.name} exact element`).toContainText(targetCase.inspectSelector);
+    }
+    const selected = page.locator("[data-mesurer-selected-measurement] > div").first();
+    const selectionBox = targetCase.selectionSelector ? (await page.locator(targetCase.selectionSelector).boundingBox())! : box;
+    await expect(selected, `${targetCase.name} selection`).toBeVisible();
+    await expect.poll(async () => {
+      const selectedBox = await selected.boundingBox();
+      if (!selectedBox) return Number.POSITIVE_INFINITY;
+      return Math.max(Math.abs(selectedBox.x - selectionBox.x), Math.abs(selectedBox.y - selectionBox.y), Math.abs(selectedBox.width - selectionBox.width), Math.abs(selectedBox.height - selectionBox.height));
+    }, { message: `${targetCase.name} selection bounds` }).toBeLessThan(targetCase.tolerance ?? 3);
+  }
+});
+
+test("inspect covers geometry and boundary edge cases", async ({ page }) => {
+  const selectTarget = async (selector: string, label: string, tolerance = 4) => {
+    const target = page.locator(selector).first();
+    await expect(target, label).toBeVisible();
+    await target.scrollIntoViewIfNeeded();
+    const box = await target.boundingBox();
+    expect(box, label).not.toBeNull();
+    if (!box) return;
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await page.mouse.move(point.x, point.y);
+    await expect(page.locator("[data-mesurer-hover='true']"), `${label} hover`).toBeVisible();
+    await page.mouse.click(point.x, point.y);
+    const selected = page.locator("[data-mesurer-selected-measurement] > div").first();
+    await expect(selected, `${label} selection`).toBeVisible();
+    await expect.poll(async () => {
+      const selectedBox = await selected.boundingBox();
+      if (!selectedBox) return Number.POSITIVE_INFINITY;
+      return Math.max(Math.abs(selectedBox.x - box.x), Math.abs(selectedBox.y - box.y), Math.abs(selectedBox.width - box.width), Math.abs(selectedBox.height - box.height));
+    }, { message: `${label} bounds` }).toBeLessThan(tolerance);
+  };
+
+  await page.goto("/bench");
+  await selectTarget('[data-testid="rotated-target"]', "rotated target");
+  await page.goto("/bench");
+  await selectTarget('[data-testid="scaled-target"]', "scaled target");
+  await page.goto("/bench");
+  await selectTarget('[data-testid="svg-circle-target"]', "SVG circle");
+  await page.goto("/bench");
+  await selectTarget('[data-testid="canvas-target"]', "canvas surface");
+  await page.goto("/bench");
+  await selectTarget('[data-testid="closed-shadow-host"]', "closed shadow host");
+  await page.goto("/bench");
+  await selectTarget('iframe[title="Opaque sandbox boundary"]', "opaque iframe boundary");
+  await page.goto("/bench");
+  await selectTarget('[data-testid="large-dom-grid"] button:last-child', "large DOM target");
+});
+
+test("renders the initial workspace state", async ({ page }) => {
+  await page.goto("/bench");
+
+  await expect(page.getByRole("heading", { name: "Initial workspace" })).toBeVisible();
+  await expect(page.locator('[data-mesurer-guide="true"]')).toBeVisible();
+  await expect(page.locator('[data-mesurer-arrow="true"][data-mesurer-arrow-id="bench-initial-arrow"]')).toBeVisible();
+  await expect(page.locator('[data-mesurer-pen="true"][data-mesurer-pen-id="bench-initial-pen"]')).toBeVisible();
+  await expect(page.locator('[data-mesurer-text="true"][data-mesurer-text-id="bench-initial-text"]')).toContainText("Seeded annotation");
+});
+
+test("renders functional dialog, popover, and menu examples", async ({ page }) => {
+  await page.goto("/bench");
+  await expect(page.getByRole("heading", { name: "Dialog, popover, and menu" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Toggle popover" }).dispatchEvent("click");
+  await expect(page.getByRole("dialog", { name: "Bench popover" })).toBeVisible();
+  await expect(page.locator("body > .bench-popover")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Bench popover" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Open actions" }).dispatchEvent("click");
+  await expect(page.getByRole("menu", { name: "Bench actions" })).toBeVisible();
+  await expect(page.locator("body > .bench-action-menu")).toBeVisible();
+  await page.getByRole("menuitem", { name: "Archive target" }).dispatchEvent("click");
+  await expect(page.getByRole("menu", { name: "Bench actions" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Open confirmation" }).dispatchEvent("click");
+  await expect(page.getByRole("dialog", { name: "Bench confirmation dialog" })).toBeVisible();
+  await page.locator(".bench-dialog-backdrop").dispatchEvent("mousedown");
+  await expect(page.getByRole("dialog", { name: "Bench confirmation dialog" })).toHaveCount(0);
+});
+
+test("switching to Inspect does not dismiss an open portaled surface", async ({ page }) => {
+  await page.goto("/bench");
+  await page.getByRole("button", { name: "Annotate tools (2)" }).click();
+  await page.getByRole("button", { name: "Toggle popover" }).dispatchEvent("click");
+  const popover = page.getByRole("dialog", { name: "Bench popover" });
+  await expect(popover).toBeVisible();
+
+  await page.getByRole("button", { name: "Select and inspect tools (1)" }).click();
+  await expect(page.locator(".mesurer-toolbar-tool-switch")).toHaveAttribute("data-value", "inspect");
+  await expect(popover).toBeVisible();
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(popover).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Annotate tools (2)" }).click();
+  await page.getByRole("button", { name: "Open confirmation" }).dispatchEvent("click");
+  const dialog = page.getByRole("dialog", { name: "Bench confirmation dialog" });
+  await expect(dialog).toBeVisible();
+  await page.getByRole("button", { name: "Select and inspect tools (1)" }).click();
+  await expect(dialog).toBeVisible();
+  const dialogBox = await dialog.boundingBox();
+  expect(dialogBox).not.toBeNull();
+  if (dialogBox) {
+    await page.mouse.click(dialogBox.x + dialogBox.width / 2, dialogBox.y + dialogBox.height / 2);
+    await expect(page.locator("[data-mesurer-inspect-info-card]")).toBeVisible();
+  }
+});
+
+test("clicking the Mesurer toolbar does not dismiss a hostile page menu", async ({
+  page,
+}) => {
+  await page.goto("/bench");
+  await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
+  await page.evaluate(() => {
+    window.addEventListener(
+      "pointerdown",
+      (event) => {
+        const menu = document.querySelector('[role="menu"][aria-label="Bench actions"]');
+        if (!(menu instanceof HTMLElement)) return;
+        const path = event.composedPath();
+        if (path.includes(menu)) return;
+        const trigger = document.querySelector('[aria-haspopup="menu"]');
+        if (trigger && path.includes(trigger)) return;
+        menu.dataset.hostileDismissed = "true";
+        menu.remove();
+      },
+      true,
+    );
+  });
+
+  await page.getByRole("button", { name: "Open actions" }).dispatchEvent("click");
+  const menu = page.getByRole("menu", { name: "Bench actions" });
+  await expect(menu).toBeVisible();
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(menu).toBeVisible();
+
+  await page.getByRole("heading", { name: "Test every edge case." }).dispatchEvent("pointerdown");
+  await expect(menu).toHaveCount(0);
+});
+
+test("inspecting a focus-dismissed model selector keeps it open", async ({ page }) => {
+  await page.goto("/bench");
+  const trigger = page.getByRole("button", { name: "Open model selector" });
+  await trigger.evaluate((element) => {
+    if (!(element instanceof HTMLButtonElement)) return;
+    element.scrollIntoView({ block: "center", behavior: "instant" });
+    element.focus();
+    element.click();
+  });
+  const listbox = page.getByRole("listbox", { name: "Model selector" });
+  await expect(listbox).toBeVisible();
+  await expect(trigger).toBeFocused();
+
+  const box = await listbox.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+  await expect(listbox).toBeVisible();
+  await expect(trigger).toBeFocused();
+  await expect(page.locator("[data-mesurer-inspect-info-card]")).toBeVisible();
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(listbox).toBeVisible();
+});
+
+test("inspect mode keeps the default cursor and ignores page controls", async ({ page }) => {
+  await page.goto("/bench");
+  const checkbox = page.locator(".bench-native-elements input[type='checkbox']");
+  await checkbox.evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+  const box = await checkbox.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator("[data-mesurer-overlay]")).toHaveCSS("cursor", "default");
+
+  await expect(checkbox).not.toBeChecked();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(checkbox).not.toBeChecked();
+  await expect(page.locator("[data-mesurer-inspect-info-card]")).toBeVisible();
+});
+
+test("inspect tool can select a portaled popover", async ({ page }) => {
+  await page.goto("/bench");
+  const trigger = page.getByRole("button", { name: "Toggle popover" });
+  await trigger.scrollIntoViewIfNeeded();
+  await trigger.dispatchEvent("click");
+  const popover = page.getByRole("dialog", { name: "Bench popover" });
+  await expect(popover).toBeVisible();
+  const box = await popover.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator("[data-mesurer-selected-measurement]")).toHaveCount(1);
+  await expect(page.locator("[data-mesurer-inspect-info-card]")).toBeVisible();
+});
+
+test("inspect tool can select an element inside the iframe", async ({ page }) => {
+  await page.goto("/bench");
+  const frame = page.getByTitle("Complex embedded application");
+  await frame.scrollIntoViewIfNeeded();
+  const box = await frame.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  const target = await frame.contentFrame()?.getByRole("heading", { name: "Iframe application" }).boundingBox();
+  expect(target).not.toBeNull();
+  if (!target) return;
+  await page.mouse.click(target.x + target.width / 2, target.y + target.height / 2);
+  const selected = page.locator("[data-mesurer-selected-measurement] > div");
+  await expect(page.locator("[data-mesurer-selected-measurement]")).toHaveCount(1);
+  await expect.poll(async () => {
+    const selection = await selected.first().boundingBox();
+    if (!target || !selection) return Number.POSITIVE_INFINITY;
+    return Math.max(Math.abs(selection.x - target.x), Math.abs(selection.y - target.y), Math.abs(selection.width - target.width), Math.abs(selection.height - target.height));
+  }).toBeLessThan(3);
+  await expect(page.locator("[data-mesurer-inspect-selector]")).toContainText("h1");
+});
+
+for (const angle of [0, 12]) {
+  test(`inspect projects scaled iframe hover, selection, and motion preview (${angle}deg)`, async ({ page }) => {
+    await page.goto("/bench");
+    await expect(page.getByRole("button", { name: "Inspect (I)", exact: true })).toBeVisible();
+    await page.evaluate((angle) => {
+      const frame = document.createElement("iframe");
+      frame.title = "Transformed motion frame";
+      frame.style.cssText = `position:fixed;left:300px;top:180px;width:400px;height:220px;box-sizing:border-box;border:4px solid black;transform:rotate(${angle}deg) scale(.7);transform-origin:top left;z-index:2`;
+      frame.srcdoc = '<style>body{margin:0;padding:20px}button{width:160px;height:48px;border:0;padding:0;font:16px sans-serif;animation:pulse 2s infinite alternate}@keyframes pulse{from{opacity:.4}to{opacity:1}}</style><button>Frame target</button>';
+      document.body.append(frame);
+    }, angle);
+    await expect(page.frameLocator('iframe[title="Transformed motion frame"]').getByRole("button", { name: "Frame target" })).toBeVisible();
+    const radians = angle * Math.PI / 180, a = .7 * Math.cos(radians), b = .7 * Math.sin(radians), c = -b, d = a;
+    const point = { x: 300 + a * 104 + c * 48, y: 180 + b * 104 + d * 48 };
+    const expected = { x: 300 + a * 24 + c * 72, y: 180 + b * 24 + d * 24, width: a * 160 - c * 48, height: b * 160 + d * 48 };
+    await page.mouse.move(point.x, point.y);
+    const hover = page.locator("[data-mesurer-hover='true']");
+    await expect(hover).toBeVisible();
+    const hoverBox = (await hover.boundingBox())!;
+    expect(Math.max(Math.abs(hoverBox.x - expected.x), Math.abs(hoverBox.y - expected.y), Math.abs(hoverBox.width - expected.width), Math.abs(hoverBox.height - expected.height))).toBeLessThan(3);
+    await page.mouse.click(point.x, point.y);
+    const selected = page.locator("[data-mesurer-selected-measurement] > div").first();
+    await expect(selected).toBeVisible();
+    const selectedBox = (await selected.boundingBox())!;
+    expect(Math.max(Math.abs(selectedBox.x - expected.x), Math.abs(selectedBox.y - expected.y), Math.abs(selectedBox.width - expected.width), Math.abs(selectedBox.height - expected.height))).toBeLessThan(3);
+    // A playing motion shows its values in the motion player, behind its own Show Inspect toggle.
+    await page.getByRole("button", { name: "Show Inspect" }).click();
+    await expect(page.locator("[data-mesurer-inspect-info-card]")).toContainText("opacity");
+  });
+}
+
+test("x-ray mode outlines accessible iframe content", async ({ page }) => {
+  await page.goto("/bench");
+  await page.getByRole("button", { name: "X-ray (X)" }).click();
+
+  const frame = page.frameLocator('iframe[title="Complex embedded application"]');
+  await expect(frame.locator("body")).toHaveClass(/xray-mode/);
+  await expect(frame.locator("h1")).toHaveCSS("outline-style", "solid");
+});
+
+test("inspect tool can hover an element inside the iframe", async ({ page }) => {
+  await page.goto("/bench");
+  const frame = page.getByTitle("Complex embedded application");
+  await frame.scrollIntoViewIfNeeded();
+  const target = await frame.contentFrame()?.getByRole("heading", { name: "Iframe application" }).boundingBox();
+  expect(target).not.toBeNull();
+  if (!target) return;
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2);
+  const hover = page.locator("[data-mesurer-hover='true']");
+  await expect(hover).toBeVisible();
+  const hoverBox = await hover.boundingBox();
+  expect(hoverBox).not.toBeNull();
+  if (hoverBox) {
+    expect(Math.abs(hoverBox.x - target.x)).toBeLessThan(3);
+    expect(Math.abs(hoverBox.y - target.y)).toBeLessThan(3);
+  }
+});
+
+test("inspect tool can reach a nested iframe", async ({ page }) => {
+  await page.goto("/bench");
+  const frame = page.getByTitle("Complex embedded application");
+  await frame.scrollIntoViewIfNeeded();
+  const nested = frame.contentFrame()?.frameLocator('iframe[title="Nested child iframe"]').getByRole("button", { name: "nested iframe target" });
+  await expect(nested!).toBeVisible();
+  await nested!.scrollIntoViewIfNeeded();
+  const target = await nested!.boundingBox();
+  expect(target).not.toBeNull();
+  if (!target) return;
+  await page.mouse.click(target.x + target.width / 2, target.y + target.height / 2);
+  await expect(page.locator("[data-mesurer-selected-measurement]")).toHaveCount(1);
+});
+
+test("inspect tool can reach an iframe inside Shadow DOM", async ({ page }) => {
+  await page.goto("/bench");
+  const embeddedFrame = page.getByTitle("Complex embedded application").contentFrame();
+  const frame = embeddedFrame?.locator("#shadow-frame-host iframe[title='Shadow child iframe']");
+  expect(frame).toBeDefined();
+  if (!frame) return;
+  await frame.scrollIntoViewIfNeeded();
+  const target = frame.contentFrame()?.getByRole("button", { name: "shadow iframe target" });
+  await expect(target!).toBeVisible();
+  const box = await target!.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator("[data-mesurer-selected-measurement]")).toHaveCount(1);
+  await expect(page.locator("[data-mesurer-inspect-selector]")).toHaveAttribute("title", /button/);
+});
+
+test("inspect selection follows an animated target", async ({ page }) => {
+  await page.goto("/bench");
+  const target = page.getByRole("button", { name: "orbit / transform", exact: true });
+  await expect(target).toBeVisible();
+  await target.evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+  const targetBox = await target.boundingBox();
+  expect(targetBox).not.toBeNull();
+  if (!targetBox) return;
+  await page.mouse.click(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2);
+  const selected = page.locator("[data-mesurer-selected-measurement] > div").first();
+  await expect(selected).toBeVisible();
+  // Live tracking updates on animation frames, so compare until the overlay
+  // converges within one frame of the continuously moving target.
+  await expect.poll(async () => {
+    const selectionBox = await selected.boundingBox();
+    const currentTargetBox = await target.boundingBox();
+    if (!selectionBox || !currentTargetBox) return Number.POSITIVE_INFINITY;
+    return Math.max(
+      Math.abs(selectionBox.x - currentTargetBox.x),
+      Math.abs(selectionBox.y - currentTargetBox.y),
+    );
+  }).toBeLessThan(10);
+});
+
+test("inspect selection remains after moving the pointer away", async ({ page }) => {
+  await page.goto("/bench");
+  const target = page.getByRole("button", { name: "orbit / transform", exact: true });
+  await target.evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+  const box = await target.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const selected = page.locator("[data-mesurer-selected-measurement] > div").first();
+  await expect(selected).toBeVisible();
+  await page.mouse.move(700, 700);
+  await page.waitForTimeout(250);
+  await expect(selected).toBeVisible();
+});
+
+test("comment draft follows an animated target", async ({ page }) => {
+  await page.goto("/bench");
+  const target = page.getByRole("button", { name: "orbit / transform", exact: true });
+  await expect(target).toBeVisible();
+  await target.evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+  await page.getByRole("button", { name: "Annotate tools (2)" }).click();
+  await page.getByRole("button", { name: "Comments (M)" }).click();
+  const targetBox = await target.boundingBox();
+  expect(targetBox).not.toBeNull();
+  if (!targetBox) return;
+  await page.mouse.click(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2);
+  const composer = page.getByRole("textbox", { name: "Comment" });
+  await expect(composer).toBeVisible();
+  const draft = page.locator("[data-mesurer-comment-draft-target]");
+  await expect(draft).toBeVisible();
+  // The composer moves with the target, so what must hold still is its offset from the draft.
+  const offset = async () => {
+    const draftBox = await draft.boundingBox();
+    const composerBox = await composer.boundingBox();
+    if (!draftBox || !composerBox) return null;
+    return { x: composerBox.x - draftBox.x, y: composerBox.y - draftBox.y };
+  };
+  const start = await offset();
+  expect(start).not.toBeNull();
+  if (!start) return;
+  await expect.poll(async () => {
+    const draftBox = await draft.boundingBox();
+    const currentTargetBox = await target.boundingBox();
+    const current = await offset();
+    if (!draftBox || !currentTargetBox || !current) return Number.POSITIVE_INFINITY;
+    return Math.max(
+      Math.abs(draftBox.x - currentTargetBox.x),
+      Math.abs(draftBox.y - currentTargetBox.y),
+      Math.abs(current.x - start.x),
+      Math.abs(current.y - start.y),
+    );
+  }, { timeout: 2_000 }).toBeLessThan(4);
+});
+
+test("comments in an iframe resolve after reload", async ({ page }) => {
+  await page.goto("/bench");
+  const frame = page.getByTitle("Complex embedded application");
+  await frame.scrollIntoViewIfNeeded();
+  const target = frame.contentFrame()?.getByRole("heading", { name: "Iframe application" });
+  await expect(target!).toBeVisible();
+  await page.getByRole("button", { name: /Settings/ }).click();
+  await page.getByRole("switch", { name: "Persist" }).click();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Annotate tools (2)" }).click();
+  await page.getByRole("button", { name: "Comments (M)" }).click();
+  const box = await target!.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.getByRole("textbox", { name: "Comment" }).fill("Iframe target survives reload.");
+  await page.getByRole("button", { name: "Send comment" }).click();
+  await expect(page.locator("[data-mesurer-comment-pin]")).toHaveCount(1);
+  await page.reload();
+  await expect(page.getByTitle("Complex embedded application")).toBeVisible();
+  await expect(page.locator("[data-mesurer-comment-pin]")).toHaveCount(1);
+});

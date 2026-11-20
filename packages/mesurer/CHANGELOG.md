@@ -1,5 +1,110 @@
 # mesurer
 
+## 0.2.7
+
+- add a pens tray to the pen tool: pick ink or marker, set each one's width and colour, and find each as it was left
+- add an eraser to the pen tool that rubs out only the part of a stroke it passes over
+- make ink strokes smooth, with a width that changes with how fast or hard you draw
+
+## 0.2.6
+
+- add responsive previews (`B`): the page at several screen sizes side by side, with Inspect, Comments, Guides, and X-ray working in each
+- add comments inside previews, copied grouped by URL and viewport
+- change `M` to toggle Comments, not Mesurer on/off
+- change Persist to on by default
+- fix motion card scope, stuck trimmed video exports, and page shortcuts firing while typing in the extension
+
+## 0.2.5
+
+- add a toolbar dock that snaps to the edges and corners of the screen, with a vertical layout on the left and right; choose Free in Settings to keep the toolbar floating
+- add Auto-hide in Settings, off by default: a docked toolbar tucks to a thin tab and comes back on hover or as the pointer nears its edge
+- improve internal structure and dark mode colors
+
+## 0.2.4
+
+- add CSS and JavaScript motion inspection with playback, scrubbing, and previews
+- improve iframe, nested-element, keyboard, comments, settings, and extension behavior
+
+## 0.2.3
+
+- add GIF export and capability-gated MP4 export
+- improve extension recording previews, shortcuts, menu stacking, and theme support
+
+## 0.2.2
+
+- improve screen recording stability across browser resizing, first-frame capture, color picker usage, and export duration
+- restore reliable Chrome extension tab capture
+- improve Inspect info cards, scrolling, nested label and icon selection, and tooltip placement
+- preserve the active tool group when opening Comments and fix Alt-distance measurement wrapping
+
+## 0.2.1
+
+- add selected-region video recording with Chrome tab capture
+- add recording playback, trimming, scaling, and WebM/MP4 export where supported
+- add the Screenshot/Screen record capture menu
+- improve recording crop mapping, frame capture, lifecycle cleanup, and extension playback
+- improve toolbar persistence across reloads and same-tab navigation
+- improve transparent overlay selection and extension capture behavior
+
+## 0.2.0
+
+- add configurable column, row, and pixel layout guides with selection, keyboard controls, persistence, and undo/redo
+- scope workspaces to page URLs and preserve guides, comments, measurements, and annotations across navigation and reloads
+- improve inspect selection, transparent and iframe targets, spacing geometry, typography details, and guide-linked distances
+- improve arrow, pen, and text annotation selection, transforms, cursors, and group editing
+- improve comment threads with replies, editing, deletion, resolve/reopen actions, selector copying, tooltips, and safer draft dismissal
+- improve toolbar dragging, menu stacking, minimization, restoration, and overlay lifecycle behavior
+- add dark mode and theme-aware controls across the toolbar, comments, settings, and menus
+- improve keyboard ownership, host-page focus handling, CSS isolation, and overlay stacking
+- improve color picker, screenshot, ruler, and settings interactions
+- improve the Chrome extension across reloads, SPA navigation, host recovery, tab persistence, screenshots, and per-tab workspaces
+
+## 0.1.5
+
+- add DOM-attached comment threads with replies, persistence, iframe and Shadow DOM targets, and agent-ready copy
+- improve inspection with copyable info cards, typography details, iframe selection, and X-ray support
+- add guide-linked measurements, Option+S pinned measurements, and shared guide controls
+- add configurable Screenshot, Rulers, and Settings features with matching shortcut control
+- isolate Mesurer styles and keyboard behavior from host pages
+- harden extension screenshot capture by removing the page-injected capture bridge
+- Thanks to [Moumen Soliman](https://github.com/moumen-soliman) for [adding Option+S pinned measurements](https://github.com/ibelick/mesurer/pull/25).
+
+## 0.1.4
+
+- inject extension scripts only after the user activates the extension
+- remove the global `<all_urls>` keyboard-gate injection to avoid interfering with embedded Mesurer instances
+
+## 0.1.3
+
+- fix color settings input, copy, and paste updates in embedded apps and the Chrome extension
+- scope extension keyboard isolation so it does not interfere with embedded Mesurer instances
+
+## 0.1.2
+
+- add configurable keyboard shortcuts and toolbar minimization
+- improve keyboard shortcut reliability in host-page editors and browser prompts
+- preserve Text-tool typing, paste, IME input, and host-page focus
+- fix annotation deletion with Backspace/Delete after a page editor has focus
+- improve Chrome extension keyboard isolation and focus handoff
+- fix interruptible toolbar motion when switching inspect/annotate or minimizing
+- stretch toolbar separators to the pill edges
+
+## 0.1.1
+
+- add grouped Select & Inspect and Annotate toolbars
+- add arrows, freehand pen strokes, and text annotations
+- add annotation selection, transforms, persistence, and undo/redo
+- add arrow and text configuration props
+- improve keyboard shortcuts and Escape behavior
+
+## 0.1.0
+
+- add screenshot region selection with clipboard copy and local download support
+- add Chrome extension visible-tab capture integration
+- add configurable screenshot copy and download settings
+- rename the public `Measurer` component and props type to `Mesurer` and `MesurerProps`
+- improve extension isolation, persistence, settings, guides, rulers, and visual inspection workflows
+
 ## 0.0.11
 
 - keep guides, select, and rulers on screen while Settings is open so styles can be edited live

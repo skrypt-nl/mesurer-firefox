@@ -1,13 +1,14 @@
 import { GUIDE_SNAP_DISTANCE, MIN_SINGLE_TARGET_SIZE } from "./constants"
 import { getBodyElementsCached, getRectFromDomCached } from "./dom"
-import { getViewportSize } from "./geometry"
+import { getViewportSize, rectContainsPoint } from "./geometry"
 import type { Guide, Point, Rect } from "./types"
 
 export const getGuideRect = (guide: Guide, ownerWindow: Window = window): Rect => {
   const viewport = getViewportSize(ownerWindow)
+  const position = Math.round(guide.position)
   return guide.orientation === "vertical"
-    ? { left: guide.position, top: 0, width: 1, height: viewport.height }
-    : { left: 0, top: guide.position, width: viewport.width, height: 1 }
+    ? { left: position, top: 0, width: 0, height: viewport.height }
+    : { left: 0, top: position, width: viewport.width, height: 0 }
 }
 
 export const getGuideDistance = (guide: Guide, point: Point) =>
@@ -94,49 +95,52 @@ export const getSnapGuidePosition = (params: {
       : point.y
 }
 
-export const getNearestElementToGuide = (params: {
-  guide: Guide
-  overlayNode: HTMLDivElement | null
+export const getElementBetweenGuides = (params: {
+  document: Document
+  overlayNode: HTMLElement | null
+  orientation: Guide["orientation"]
+  start: number
+  end: number
+  pointer: Point
 }) => {
-  const elements = getBodyElementsCached()
-  const position = params.guide.position
-  let bestElement: HTMLElement | null = null
-  let bestDistance = Number.POSITIVE_INFINITY
+  const min = Math.min(params.start, params.end)
+  const max = Math.max(params.start, params.end)
+  if (max - min < 1) return null
+
+  const ownerDocument = params.document
+  const overlayNode = params.overlayNode
+  const elements = getBodyElementsCached(ownerDocument)
+  const ElementConstructor = ownerDocument.defaultView?.HTMLElement ?? HTMLElement
+  let bestElement: Element | null = null
   let bestArea = Number.POSITIVE_INFINITY
 
   for (const element of elements) {
-    if (!(element instanceof HTMLElement)) continue
-    if (params.overlayNode && params.overlayNode.contains(element)) continue
-    if (element === document.body || element === document.documentElement)
+    if (!(element instanceof ElementConstructor)) continue
+    if (overlayNode && (overlayNode === element || overlayNode.contains(element))) {
       continue
+    }
+    if (element === ownerDocument.body || element === ownerDocument.documentElement) {
+      continue
+    }
     const rect = getRectFromDomCached(element)
     if (
       rect.width < MIN_SINGLE_TARGET_SIZE ||
       rect.height < MIN_SINGLE_TARGET_SIZE
-    )
+    ) {
       continue
+    }
+    if (!rectContainsPoint(rect, params.pointer)) continue
 
-    const distance =
-      params.guide.orientation === "vertical"
-        ? position < rect.left
-          ? rect.left - position
-          : position > rect.left + rect.width
-            ? position - (rect.left + rect.width)
-            : 0
-        : position < rect.top
-          ? rect.top - position
-          : position > rect.top + rect.height
-            ? position - (rect.top + rect.height)
-            : 0
+    const overlap =
+      params.orientation === "vertical"
+        ? Math.min(rect.left + rect.width, max) - Math.max(rect.left, min)
+        : Math.min(rect.top + rect.height, max) - Math.max(rect.top, min)
+    if (overlap <= 0) continue
 
     const area = rect.width * rect.height
-    if (
-      distance < bestDistance ||
-      (distance === bestDistance && area < bestArea)
-    ) {
-      bestDistance = distance
-      bestArea = area
+    if (area < bestArea) {
       bestElement = element
+      bestArea = area
     }
   }
 

@@ -1,0 +1,100 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright";
+import { preview } from "vite";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const dist = join(root, "dist");
+const port = 4179;
+
+const routes = [
+  { path: "/", ready: "#landing-title" },
+  { path: "/docs", ready: "#doc-title" },
+  { path: "/docs/props", ready: "#doc-title" },
+  { path: "/docs/shortcuts", ready: "#doc-title" },
+  { path: "/changelog", ready: "#doc-title" },
+  { path: "/privacy", ready: "#doc-title" },
+  { path: "/terms", ready: "#doc-title" },
+  { path: "/tools", ready: "#tool-title" },
+  { path: "/tools/aspect-ratio-calculator", ready: "#tool-title" },
+  { path: "/tools/color-picker", ready: "#tool-title" },
+  { path: "/tools/rgb-to-hex", ready: "#tool-title" },
+  { path: "/tools/hex-to-rgb", ready: "#tool-title" },
+  { path: "/tools/webp-to-png", ready: "#tool-title" },
+  { path: "/tools/svg-to-png", ready: "#tool-title" },
+  { path: "/tools/svg-to-jpg", ready: "#tool-title" },
+  { path: "/tools/png-to-jpg", ready: "#tool-title" },
+  { path: "/tools/jpg-to-png", ready: "#tool-title" },
+  { path: "/tools/image-to-svg", ready: "#tool-title" },
+  { path: "/tools/heic-to-jpg", ready: "#tool-title" },
+  { path: "/tools/avif-to-png", ready: "#tool-title" },
+  { path: "/tools/jpeg-to-jpg", ready: "#tool-title" },
+  { path: "/tools/random-color-palette-generator", ready: "#tool-title" },
+  { path: "/tools/px-to-rem", ready: "#tool-title" },
+  { path: "/tools/rem-to-px", ready: "#tool-title" },
+  // Cloudflare Pages answers any address with no file with the top-level 404.html, and a 404 status.
+  { path: "/404", ready: "#not-found-title", file: "404.html" },
+];
+
+const outFile = (route) =>
+  route.file ? join(dist, route.file) : route.path === "/" ? join(dist, "index.html") : join(dist, route.path.slice(1), "index.html");
+
+const server = await preview({
+  root,
+  preview: { host: "127.0.0.1", port, strictPort: true },
+});
+
+const browser = await chromium.launch();
+const page = await browser.newPage();
+await page.addInitScript(() => {
+  window.__MESURER_PRERENDER__ = true;
+});
+
+try {
+  const files = [];
+  for (const route of routes) {
+    await page.goto(`http://127.0.0.1:${port}${route.path}`, { waitUntil: "load" });
+    await page.waitForSelector(route.ready, { timeout: 15_000 });
+    await page.evaluate((notFound) => {
+      // The not-found page is no page of its own: it names no address as the one to index.
+      if (notFound) document.querySelectorAll('link[rel="canonical"], meta[property="og:url"]').forEach((node) => node.remove());
+      const keepLast = (selector) => {
+        const nodes = [...document.querySelectorAll(selector)];
+        nodes.slice(0, -1).forEach((node) => node.remove());
+      };
+      const wantedTitle = document.title;
+      let keptTitle = false;
+      for (const title of document.querySelectorAll("title")) {
+        if (!keptTitle && title.textContent === wantedTitle) {
+          keptTitle = true;
+          continue;
+        }
+        title.remove();
+      }
+      keepLast('meta[name="description"]');
+      keepLast('link[rel="canonical"]');
+      keepLast('meta[property="og:url"]');
+      keepLast('meta[property="og:title"]');
+      keepLast('meta[property="og:description"]');
+      keepLast('meta[name="twitter:title"]');
+      keepLast('meta[name="twitter:description"]');
+    }, Boolean(route.file));
+    // Mesurer is mounted on the client only: its live toolbar is taken out of the snapshot, or the
+    // page would show a second, unmoving toolbar next to the one the client mounts.
+    await page.evaluate(() => document.querySelectorAll(".mesurer-root").forEach((node) => node.remove()));
+    const html = await page.content();
+    if (!html.includes("<h1")) {
+      throw new Error(`Prerender produced no heading for ${route.path}`);
+    }
+    files.push({ file: outFile(route), html, path: route.path });
+  }
+  for (const { file, html, path } of files) {
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, html);
+    console.log(`prerendered ${path} -> ${relative(root, file)}`);
+  }
+} finally {
+  await browser.close();
+  await server.close();
+}

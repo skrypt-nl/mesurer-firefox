@@ -1,0 +1,377 @@
+import { useCallback } from "react";
+import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import type {
+  Arrow,
+  Guide,
+  InspectMeasurement,
+  PenStroke,
+  Point,
+  Rect,
+  TextAnnotation,
+  ToolMode,
+} from "../core/types";
+import type { TextDraft } from "./use-annotation-callbacks";
+import { useHotkeys } from "./use-hotkeys";
+import { useOverlayKeyboard } from "./use-overlay-keyboard";
+import type { ResolvedMesurerFeatures } from "../core/features";
+
+type Options = {
+  enabled: boolean;
+  toolMode: ToolMode;
+  xrayVisible: boolean;
+  rulersVisible: boolean;
+  toolbarActive: boolean;
+  minimized: boolean;
+  shortcutsEnabled: boolean;
+  settingsOpen: boolean;
+  layoutGuidesOpen: boolean;
+  responsiveOpen: boolean;
+  ownerDocument: Document;
+  ownerWindow: Window;
+  toolbarRef: MutableRefObject<HTMLDivElement | null>;
+  overlayRef: MutableRefObject<HTMLDivElement | null>;
+  scrollOffset: Point;
+  guides: Guide[];
+  arrows: Arrow[];
+  penStrokes: PenStroke[];
+  textAnnotations: TextAnnotation[];
+  selectedGuideIds: string[];
+  selectedArrowIds: string[];
+  selectedPenStrokeIds: string[];
+  selectedTextIds: string[];
+  selectedMeasurements: InspectMeasurement[];
+  selectedMeasurement: InspectMeasurement | null;
+  selectedElement: Element | null;
+  commentDraftActive: boolean;
+  cancelCommentDraft: () => void;
+  hasComments: () => boolean;
+  start: Point | null;
+  arrowStart: Point | null;
+  draggingGuideId: string | null;
+  isDragging: boolean;
+  textDraft: TextDraft | null;
+  textDraftRef: MutableRefObject<TextDraft | null>;
+  setTextDraft: Dispatch<SetStateAction<TextDraft | null>>;
+  setStart: Dispatch<SetStateAction<Point | null>>;
+  setEnd: Dispatch<SetStateAction<Point | null>>;
+  setIsDragging: Dispatch<SetStateAction<boolean>>;
+  setHoverRect: Dispatch<SetStateAction<Rect | null>>;
+  setHoverPointer: Dispatch<SetStateAction<Point | null>>;
+  setHoverElement: (element: Element | null) => void;
+  setSelectedElement: (element: Element | null) => void;
+  setArrowStart: Dispatch<SetStateAction<Point | null>>;
+  setArrowMiddle: Dispatch<SetStateAction<Point | null>>;
+  setArrowPreviewEnd: Dispatch<SetStateAction<Point | null>>;
+  setXrayVisible: Dispatch<SetStateAction<boolean>>;
+  setAltPressed: Dispatch<SetStateAction<boolean>>;
+  pinDistance: () => boolean;
+  setToolMode: (mode: ToolMode) => void;
+  clearSelectionRect: () => void;
+  clearGuideDragHold: () => void;
+  cancelArrowInteraction: () => void;
+  cancelPenInteraction: () => void;
+  cancelMoveSession: () => void;
+  hasArrowInteraction: () => boolean;
+  hasPenInteraction: () => boolean;
+  clearSelection: () => void;
+  recordSnapshot: () => void;
+  setSelectedGuideIds: Dispatch<SetStateAction<string[]>>;
+  setSelectedArrowIds: Dispatch<SetStateAction<string[]>>;
+  setSelectedTextIds: Dispatch<SetStateAction<string[]>>;
+  setSelectedPenStrokeIds: Dispatch<SetStateAction<string[]>>;
+  setSelectedMeasurements: Dispatch<SetStateAction<InspectMeasurement[]>>;
+  setSelectedMeasurement: Dispatch<SetStateAction<InspectMeasurement | null>>;
+  screenshot: {
+    active: boolean;
+    previewUrl: string | null;
+    closeUi: () => void;
+    toggleSelection: () => void;
+  };
+  screenRecording: {
+    selecting: boolean;
+    recording: boolean;
+    toggleSelection: () => void;
+    cancelSelection: () => void;
+    stop: () => void;
+  };
+  colorPicker: {
+    active: boolean;
+    setActive: (active: boolean) => void;
+    open: () => Promise<void>;
+  };
+  undo: () => void;
+  redo: () => void;
+  removeSelected: () => boolean;
+  selectAllAnnotations: () => boolean;
+  setEnabled: Dispatch<SetStateAction<boolean>>;
+  setRulersVisible: Dispatch<SetStateAction<boolean>>;
+  setGuideOrientation: Dispatch<SetStateAction<"vertical" | "horizontal">>;
+  onInteract: () => void;
+  onMinimize: () => void;
+  onToggleSettings: () => void;
+  onToggleLayoutGuides: () => void;
+  onCloseLayoutGuidesMenu: () => void;
+  onToggleResponsive: () => void;
+  onCopyComments: () => void | Promise<boolean>;
+  onResolveAllComments: () => void;
+  dismissInspectorPins: () => boolean;
+  selectedCommentId: string | null;
+  closeComment: () => void;
+  features: ResolvedMesurerFeatures;
+};
+
+export const useInteractionLifecycle = (options: Options) => {
+  const {
+    setStart,
+    setEnd,
+    setIsDragging,
+    clearSelectionRect,
+    clearGuideDragHold,
+    setHoverRect,
+    setHoverPointer,
+    setHoverElement,
+    setArrowStart,
+    setArrowMiddle,
+    setArrowPreviewEnd,
+    setTextDraft,
+  } = options;
+
+  const clearTransientState = useCallback(() => {
+    options.cancelArrowInteraction();
+    options.cancelPenInteraction();
+    options.cancelMoveSession();
+    clearGuideDragHold();
+    setStart(null);
+    setEnd(null);
+    setIsDragging(false);
+    clearSelectionRect();
+    setHoverRect(null);
+    setHoverPointer(null);
+    setHoverElement(null);
+    setArrowStart(null);
+    setArrowMiddle(null);
+    setArrowPreviewEnd(null);
+    if (options.textDraftRef.current) {
+      options.textDraftRef.current = null;
+      setTextDraft(null);
+    }
+  }, [
+    clearGuideDragHold,
+    clearSelectionRect,
+    options,
+    setArrowMiddle,
+    setArrowPreviewEnd,
+    setArrowStart,
+    setEnd,
+    setHoverElement,
+    setHoverPointer,
+    setHoverRect,
+    setIsDragging,
+    setStart,
+    setTextDraft,
+  ]);
+
+  const hasTransientInteraction = useCallback(
+    () =>
+      Boolean(
+        options.arrowStart ||
+          options.textDraft ||
+          options.isDragging ||
+          options.start ||
+          options.draggingGuideId ||
+          options.hasArrowInteraction() ||
+          options.hasPenInteraction(),
+      ),
+    [options],
+  );
+  const isToolbarIdle = useCallback(
+    () =>
+      options.toolMode === "none" &&
+      !options.xrayVisible &&
+      !options.rulersVisible,
+    [options],
+  );
+  const isActiveToolMode = useCallback(
+    () =>
+      options.toolMode !== "none" ||
+      options.xrayVisible ||
+      options.rulersVisible,
+    [options],
+  );
+  const hasSelection = useCallback(
+    () =>
+      options.selectedGuideIds.length > 0 ||
+      options.selectedArrowIds.length > 0 ||
+      options.selectedTextIds.length > 0 ||
+      options.selectedPenStrokeIds.length > 0,
+    [options],
+  );
+  const exitActiveTool = useCallback(() => {
+    clearTransientState();
+    options.clearSelection();
+    options.setXrayVisible(false);
+    options.setRulersVisible(false);
+    options.setToolMode("none");
+  }, [clearTransientState, options]);
+  const exitMesurerCompletely = useCallback(() => {
+    clearTransientState();
+    options.clearSelection();
+    options.colorPicker.setActive(false);
+    options.screenshot.closeUi();
+    if (options.screenRecording.recording) options.screenRecording.stop();
+    else options.screenRecording.cancelSelection();
+    options.setXrayVisible(false);
+    options.setRulersVisible(false);
+    options.setToolMode("none");
+  }, [clearTransientState, options]);
+
+  const keyboardOwned = options.enabled && !options.minimized;
+  const overlayActive =
+    options.enabled && (options.toolMode !== "none" || options.toolbarActive);
+
+  useOverlayKeyboard({
+    eventTarget: options.ownerWindow,
+    overlayActive: keyboardOwned,
+  });
+
+  useHotkeys({
+    eventTarget: options.ownerWindow,
+    overlayRef: options.overlayRef,
+    enabled: options.enabled,
+    clearTransientState,
+    hasTransientInteraction,
+    isActiveToolMode,
+    isToolbarIdle,
+    hasSelection,
+    clearSelection: options.clearSelection,
+    exitActiveTool,
+    dismissInspectorPins: options.dismissInspectorPins,
+    hasOpenComment: () => options.selectedCommentId !== null,
+    closeComment: options.closeComment,
+     commentDraftActive: options.commentDraftActive,
+     cancelCommentDraft: options.cancelCommentDraft,
+     hasComments: options.hasComments,
+    minimizeMesurer: options.onMinimize,
+    shortcutsEnabled: options.shortcutsEnabled,
+    minimized: options.minimized,
+    undo: options.undo,
+    redo: options.redo,
+    removeSelected: options.removeSelected,
+    selectAllAnnotations: options.selectAllAnnotations,
+    setEnabled: options.setEnabled,
+    setToolMode: options.setToolMode as Dispatch<SetStateAction<ToolMode>>,
+    setXrayVisible: options.setXrayVisible,
+    setRulersVisible: options.setRulersVisible,
+    setAltPressed: options.setAltPressed,
+    pinDistance: options.pinDistance,
+    isOverlayActive: () => overlayActive,
+    setGuideOrientation: options.setGuideOrientation,
+    onInteract: options.onInteract,
+    onColorPicker: () => {
+      options.screenshot.closeUi();
+      if (!options.screenRecording.recording) {
+        options.screenRecording.cancelSelection();
+      }
+      void options.colorPicker.open();
+    },
+    onScreenshot: () => {
+      options.screenRecording.cancelSelection();
+      options.screenshot.toggleSelection();
+    },
+    onScreenRecord: () => {
+      options.screenshot.closeUi();
+      if (options.screenRecording.recording) {
+        options.screenRecording.stop();
+        return;
+      }
+      options.screenRecording.toggleSelection();
+    },
+    onCopyComments: options.onCopyComments,
+    onResolveAllComments: options.onResolveAllComments,
+    onCloseScreenshot: () => {
+      options.screenshot.closeUi();
+      options.screenRecording.cancelSelection();
+    },
+    isScreenshotActive: () =>
+      options.screenshot.active ||
+      Boolean(options.screenshot.previewUrl) ||
+      options.screenRecording.selecting,
+    isScreenRecording: () => options.screenRecording.recording,
+    onStopScreenRecording: () => options.screenRecording.stop(),
+    onToggleXray: () => {
+      options.setEnabled(true);
+      options.colorPicker.setActive(false);
+      options.screenshot.closeUi();
+      options.screenRecording.cancelSelection();
+      options.setXrayVisible((previous) => {
+        const next = !previous;
+        if (
+          next &&
+          (options.toolMode === "selection" ||
+            options.toolMode === "arrows" ||
+            options.toolMode === "pen" ||
+            options.toolMode === "text")
+        ) {
+          options.setToolMode("select");
+        }
+        return next;
+      });
+    },
+    onToggleRulers: () => {
+      options.setEnabled(true);
+      options.colorPicker.setActive(false);
+      options.screenshot.closeUi();
+      options.screenRecording.cancelSelection();
+      options.setRulersVisible((previous) => {
+        const next = !previous;
+        if (
+          next &&
+          (options.toolMode === "selection" ||
+            options.toolMode === "arrows" ||
+            options.toolMode === "pen" ||
+            options.toolMode === "text")
+        ) {
+          options.setToolMode("select");
+        }
+        return next;
+      });
+    },
+    onToggleSettings: options.onToggleSettings,
+    onToggleLayoutGuides: options.onToggleLayoutGuides,
+    onCloseLayoutGuidesMenu: options.onCloseLayoutGuidesMenu,
+    isSettingsOpen: () => options.settingsOpen,
+    isLayoutGuidesOpen: () => options.layoutGuidesOpen,
+    onToggleResponsive: options.onToggleResponsive,
+    isResponsiveOpen: () => options.responsiveOpen,
+    onCloseColorPicker: () => options.colorPicker.setActive(false),
+    isColorPickerActive: () => options.colorPicker.active,
+    features: options.features,
+    isFeatureVisible: (feature) => {
+      const node = options.toolbarRef.current?.querySelector(
+        `[data-tool-id="${feature}"]`,
+      ) as HTMLElement | null;
+      if (!node || node.getClientRects().length === 0) return false;
+      if (
+        (node.closest(".mesurer-toolbar-motion") as HTMLElement | null)?.style
+          .visibility === "hidden"
+      ) {
+        return true;
+      }
+      const view = node.ownerDocument.defaultView;
+      for (let current: HTMLElement | null = node; current; current = current.parentElement) {
+        // Inactive tool groups intentionally use visibility:hidden while their
+        // shortcuts remain available, so stop before evaluating that container.
+        if (current.classList.contains("mesurer-toolbar-tool-slot")) break;
+        if (view?.getComputedStyle(current).visibility === "hidden") return false;
+      }
+      return true;
+    },
+  });
+
+  return {
+    clearTransientState,
+    hasTransientInteraction,
+    exitActiveTool,
+    exitMesurerCompletely,
+  };
+};

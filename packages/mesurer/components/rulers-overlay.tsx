@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type PointerEvent } from "react";
+import { memo, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import type { Guide } from "../core/types";
 import type { RulerSettings } from "../core/persistence";
 
@@ -52,7 +52,7 @@ export const RulersOverlay = memo(function RulersOverlay({
     id: string;
   } | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!settings.edgeReveal) return;
     const handlePointerMove = (event: Event) => {
       const pointer = event as globalThis.MouseEvent;
@@ -146,7 +146,7 @@ export const RulersOverlay = memo(function RulersOverlay({
       }}
     >
       <div
-        className="msr:absolute msr:left-[18px] msr:right-0 msr:top-0 msr:overflow-hidden msr:bg-white"
+        className="msr:absolute msr:left-[18px] msr:right-0 msr:top-0 msr:overflow-hidden msr:bg-surface"
         style={{
           boxShadow: "0 1px 3px rgba(0, 0, 0, 0.12)",
           height: RULER_SIZE,
@@ -171,10 +171,10 @@ export const RulersOverlay = memo(function RulersOverlay({
               x2="100%"
               gradientUnits="objectBoundingBox"
             >
-              <stop offset="0" stopColor="white" stopOpacity="0" />
-              <stop offset="0.2" stopColor="white" />
-              <stop offset="0.8" stopColor="white" />
-              <stop offset="1" stopColor="white" stopOpacity="0" />
+              <stop offset="0" stopColor="var(--msr-surface)" stopOpacity="0" />
+              <stop offset="0.2" stopColor="var(--msr-surface)" />
+              <stop offset="0.8" stopColor="var(--msr-surface)" />
+              <stop offset="1" stopColor="var(--msr-surface)" stopOpacity="0" />
             </linearGradient>
           </defs>
           {ticks.map((x) => {
@@ -242,7 +242,7 @@ export const RulersOverlay = memo(function RulersOverlay({
       </div>
 
       <div
-        className="msr:absolute msr:bottom-0 msr:left-0 msr:top-[18px] msr:w-[18px] msr:overflow-hidden msr:bg-white"
+        className="msr:absolute msr:bottom-0 msr:left-0 msr:top-[18px] msr:w-[18px] msr:overflow-hidden msr:bg-surface"
         style={{
           boxShadow: "1px 0 3px rgba(0, 0, 0, 0.12)",
           width: RULER_SIZE,
@@ -267,10 +267,10 @@ export const RulersOverlay = memo(function RulersOverlay({
               y2="100%"
               gradientUnits="objectBoundingBox"
             >
-              <stop offset="0" stopColor="white" stopOpacity="0" />
-              <stop offset="0.2" stopColor="white" />
-              <stop offset="0.8" stopColor="white" />
-              <stop offset="1" stopColor="white" stopOpacity="0" />
+              <stop offset="0" stopColor="var(--msr-surface)" stopOpacity="0" />
+              <stop offset="0.2" stopColor="var(--msr-surface)" />
+              <stop offset="0.8" stopColor="var(--msr-surface)" />
+              <stop offset="1" stopColor="var(--msr-surface)" stopOpacity="0" />
             </linearGradient>
           </defs>
           {ticks.map((y) => {
@@ -344,7 +344,7 @@ export const RulersOverlay = memo(function RulersOverlay({
         </svg>
       </div>
 
-      <div className="msr:absolute msr:left-0 msr:top-0 msr:size-[18px] msr:bg-white" />
+      <div className="msr:absolute msr:left-0 msr:top-0 msr:size-[18px] msr:bg-surface" />
     </div>
   );
 });

@@ -1,14 +1,44 @@
 import type {
+  CommentThread,
   DistanceOverlay,
   Guide,
+  Arrow,
+  PenChoice,
+  PenStroke,
   Measurement,
+  TextAnnotation,
+  PersistentToolMode,
   ToolMode,
 } from "./types"
 import type { ColorPickerFormat } from "./colors"
+import { PEN_KINDS, type PenSettings } from "./ink"
+import type { ToolbarPlacement } from "./toolbar-dock"
+import { normalizeTextStyle, type TextStyleSettings } from "./text-style"
+import { normalizeLayoutGuides, type LayoutGuide } from "./layout-guides"
+import {
+  compareRevisions,
+  createNextRevision,
+  createWriterId,
+  isPersistenceRevision,
+  latestRevision,
+  type PersistenceRevision,
+} from "./persistence-revision"
+
+export type { TextBackground, TextFont, TextStyleSettings } from "./text-style"
 
 export const MESURER_STORAGE_VERSION = 2
 
 export type GuidePattern = "solid" | "dashed" | "dotted"
+export type InfoCardMode = "hover" | "click"
+export type ThemeMode = "system" | "light" | "dark"
+// Edge a snapped toolbar is glued to.
+export type ToolbarSide = "top" | "bottom" | "left" | "right"
+export const TOOLBAR_SIDES: ToolbarSide[] = ["top", "bottom", "left", "right"]
+// "free" keeps the toolbar wherever it was dragged; "snap" glues it to an edge when dragged close.
+export type ToolbarDock = "free" | "snap"
+
+export const TOOLBAR_DOCKS: ToolbarDock[] = ["free", "snap"]
+export const DEFAULT_TOOLBAR_DOCK: ToolbarDock = "snap"
 
 export type GuideStyle = {
   opacity: number
@@ -36,37 +66,149 @@ export const DEFAULT_RULER_SETTINGS: RulerSettings = {
   edgeReveal: false,
 }
 
+export type ShareMode = "screenshot" | "record"
+
+export type ScreenshotSettings = {
+  copy: boolean
+  download: boolean
+  shareMode: ShareMode
+}
+
+export const DEFAULT_SCREENSHOT_SETTINGS: ScreenshotSettings = {
+  copy: true,
+  download: false,
+  shareMode: "screenshot",
+}
+
 export type MesurerStoredSettings = {
+  lastToolMode?: PersistentToolMode
+  toolbarPosition?: ToolbarPlacement
+  toolbarDock?: ToolbarDock
+  toolbarAutoHide?: boolean
+  penKind?: PenChoice
+  penSettings?: PenSettings
   highlightColor?: string
   guideColor?: string
+  arrowColor?: string
+  guideHighlightEnabled?: boolean
   hoverHighlightEnabled?: boolean
+  layoutDetailsEnabled?: boolean
   colorPickerFormats?: ColorPickerFormat[]
   colorPickerClickFormat?: ColorPickerFormat
   snapEnabled?: boolean
   snapGuidesEnabled?: boolean
+  snapArrowsEnabled?: boolean
+  arrowClickToPlace?: boolean
   selectNewGuideEnabled?: boolean
   multiMeasureEnabled?: boolean
+  infoCardMode?: InfoCardMode
   persistOnReload?: boolean
+  shortcutsEnabled?: boolean
+  theme?: ThemeMode
   guideStyle?: Partial<GuideStyle>
   rulerSettings?: Partial<RulerSettings>
+  screenshotSettings?: Partial<ScreenshotSettings>
+  textStyle?: Partial<TextStyleSettings>
 }
 
-export type MesurerStoredWorkspace = {
+export type MesurerSessionChrome = {
   enabled: boolean
+  minimized?: boolean
   xrayVisible: boolean
   toolMode: ToolMode
   rulersVisible: boolean
   guideOrientation: "vertical" | "horizontal"
+}
+
+export type MesurerPageArtifacts = {
   guides: Guide[]
   selectedGuideIds: string[]
+  arrows: Arrow[]
+  selectedArrowIds: string[]
+  selectedPenStrokeIds?: string[]
+  selectedTextIds?: string[]
+  penStrokes: PenStroke[]
+  textAnnotations: TextAnnotation[]
   measurements: Measurement[]
   activeMeasurement: Measurement | null
   heldDistances: DistanceOverlay[]
+  comments?: CommentThread[]
+  layoutGuides?: LayoutGuide[]
 }
+
+export type MesurerStoredWorkspace = MesurerSessionChrome & MesurerPageArtifacts
+
+export type PagedWorkspaceStore = MesurerSessionChrome & {
+  pages: Record<string, MesurerPageArtifacts | null>
+}
+
+export const DEFAULT_SESSION_CHROME: MesurerSessionChrome = {
+  enabled: false,
+  xrayVisible: false,
+  toolMode: "none",
+  rulersVisible: false,
+  guideOrientation: "vertical",
+}
+
+export const EMPTY_PAGE_ARTIFACTS: MesurerPageArtifacts = {
+  guides: [],
+  selectedGuideIds: [],
+  arrows: [],
+  selectedArrowIds: [],
+  selectedPenStrokeIds: [],
+  selectedTextIds: [],
+  penStrokes: [],
+  textAnnotations: [],
+  measurements: [],
+  activeMeasurement: null,
+  heldDistances: [],
+  comments: [],
+  layoutGuides: [],
+}
+
+export const isPagedWorkspaceStore = (value: unknown): value is PagedWorkspaceStore => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const input = value as Record<string, unknown>
+  return Boolean(input.pages) && typeof input.pages === "object" && !Array.isArray(input.pages) && !("guides" in input)
+}
+
+export const toSessionChrome = (value: MesurerSessionChrome): MesurerSessionChrome => ({
+  enabled: value.enabled,
+  ...(typeof value.minimized === "boolean" ? { minimized: value.minimized } : {}),
+  xrayVisible: value.xrayVisible,
+  toolMode: value.toolMode,
+  rulersVisible: value.rulersVisible,
+  guideOrientation: value.guideOrientation,
+})
+
+export const toPageArtifacts = (value: MesurerPageArtifacts): MesurerPageArtifacts => ({
+  guides: value.guides,
+  selectedGuideIds: value.selectedGuideIds,
+  arrows: value.arrows,
+  selectedArrowIds: value.selectedArrowIds,
+  selectedPenStrokeIds: value.selectedPenStrokeIds ?? [],
+  selectedTextIds: value.selectedTextIds ?? [],
+  penStrokes: value.penStrokes,
+  textAnnotations: value.textAnnotations,
+  measurements: value.measurements,
+  activeMeasurement: value.activeMeasurement,
+  heldDistances: value.heldDistances,
+  comments: value.comments ?? [],
+  layoutGuides: value.layoutGuides ?? [],
+})
+
+export const mergeWorkspace = (
+  chrome: MesurerSessionChrome,
+  artifacts: MesurerPageArtifacts | null | undefined,
+): MesurerStoredWorkspace => ({
+  ...toSessionChrome(chrome),
+  ...toPageArtifacts(artifacts ?? EMPTY_PAGE_ARTIFACTS),
+})
 
 export type MesurerPersistenceSnapshot = {
   settings: MesurerStoredSettings
-  workspace: MesurerStoredWorkspace | null
+  workspace: MesurerStoredWorkspace | PagedWorkspaceStore | null
+  revision?: PersistenceRevision
 }
 
 export type PersistenceChangeSource = {
@@ -77,7 +219,7 @@ export type PersistenceChangeSource = {
 export type MesurerPersistence = {
   load: () => MesurerPersistenceSnapshot | null
   saveSettings: (settings: MesurerStoredSettings) => void
-  saveWorkspace: (workspace: MesurerStoredWorkspace) => void
+  saveWorkspace: (workspace: MesurerStoredWorkspace | PagedWorkspaceStore) => void
   clearWorkspace: () => void
   clearSettings: () => void
   subscribe?: (
@@ -91,8 +233,9 @@ export type MesurerPersistence = {
 
 type StoredRecord = {
   version: number
+  revision?: PersistenceRevision
   settings?: MesurerStoredSettings
-  workspace?: MesurerStoredWorkspace | null
+  workspace?: MesurerStoredWorkspace | PagedWorkspaceStore | null
   enabled?: boolean
   xrayVisible?: boolean
   toolMode?: ToolMode
@@ -100,23 +243,33 @@ type StoredRecord = {
   guideOrientation?: "vertical" | "horizontal"
   guides?: Guide[]
   selectedGuideIds?: string[]
+  arrows?: Arrow[]
+  selectedArrowIds?: string[]
+  selectedPenStrokeIds?: string[]
+  selectedTextIds?: string[]
+  penStrokes?: PenStroke[]
+  textAnnotations?: TextAnnotation[]
   measurements?: Measurement[]
   activeMeasurement?: Measurement | null
   heldDistances?: DistanceOverlay[]
+  comments?: CommentThread[]
 }
 
 const isFormat = (value: unknown): value is ColorPickerFormat =>
   value === "hex" || value === "rgb" || value === "hsl" || value === "oklch"
 
+const clampToTwoDecimals = (value: number, min: number, max: number) =>
+  Number(Math.min(max, Math.max(min, value)).toFixed(2))
+
 const normalizeGuideStyle = (value: unknown): GuideStyle | undefined => {
   if (!value || typeof value !== "object") return undefined
   const input = value as Record<string, unknown>
   return {
-    opacity: typeof input.opacity === "number" ? Math.min(1, Math.max(0, input.opacity)) : DEFAULT_GUIDE_STYLE.opacity,
-    width: typeof input.width === "number" ? Math.min(4, Math.max(1, input.width)) : DEFAULT_GUIDE_STYLE.width,
+    opacity: typeof input.opacity === "number" && Number.isFinite(input.opacity) ? clampToTwoDecimals(input.opacity, 0, 1) : DEFAULT_GUIDE_STYLE.opacity,
+    width: typeof input.width === "number" && Number.isFinite(input.width) ? clampToTwoDecimals(input.width, 0.01, 4) : DEFAULT_GUIDE_STYLE.width,
     pattern: input.pattern === "dashed" || input.pattern === "dotted" ? input.pattern : DEFAULT_GUIDE_STYLE.pattern,
-    dashLength: typeof input.dashLength === "number" ? Math.min(24, Math.max(2, input.dashLength)) : DEFAULT_GUIDE_STYLE.dashLength,
-    gap: typeof input.gap === "number" ? Math.min(24, Math.max(0, input.gap)) : DEFAULT_GUIDE_STYLE.gap,
+    dashLength: typeof input.dashLength === "number" && Number.isFinite(input.dashLength) ? clampToTwoDecimals(input.dashLength, 2, 24) : DEFAULT_GUIDE_STYLE.dashLength,
+    gap: typeof input.gap === "number" && Number.isFinite(input.gap) ? clampToTwoDecimals(input.gap, 0, 24) : DEFAULT_GUIDE_STYLE.gap,
   }
 }
 
@@ -124,13 +277,61 @@ const normalizeRulerSettings = (value: unknown): RulerSettings | undefined => {
   if (!value || typeof value !== "object") return undefined
   const input = value as Record<string, unknown>
   return {
-    opacity: typeof input.opacity === "number" ? Math.min(1, Math.max(0.2, input.opacity)) : DEFAULT_RULER_SETTINGS.opacity,
+    opacity: typeof input.opacity === "number" && Number.isFinite(input.opacity) ? clampToTwoDecimals(input.opacity, 0.2, 1) : DEFAULT_RULER_SETTINGS.opacity,
     edgeReveal: typeof input.edgeReveal === "boolean" ? input.edgeReveal : DEFAULT_RULER_SETTINGS.edgeReveal,
   }
 }
 
+const normalizeScreenshotSettings = (value: unknown): ScreenshotSettings | undefined => {
+  if (!value || typeof value !== "object") return undefined
+  const input = value as Record<string, unknown>
+  const copy = typeof input.copy === "boolean" ? input.copy : DEFAULT_SCREENSHOT_SETTINGS.copy
+  const download =
+    typeof input.download === "boolean" ? input.download : DEFAULT_SCREENSHOT_SETTINGS.download
+  const shareMode = input.shareMode === "record" ? "record" : DEFAULT_SCREENSHOT_SETTINGS.shareMode
+  if (!copy && !download) return { ...DEFAULT_SCREENSHOT_SETTINGS, shareMode }
+  return { copy, download, shareMode }
+}
+
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value)
+
+const isToolbarDock = (value: unknown): value is ToolbarDock =>
+  value === "free" || value === "snap"
+
+const isPenChoice = (value: unknown): value is PenChoice =>
+  value === "eraser" || (PEN_KINDS as readonly unknown[]).includes(value)
+
+// What each pen was set to, with only what is a width or a colour kept.
+const normalizePenSettings = (input: unknown): PenSettings => {
+  const settings: PenSettings = {}
+  if (!input || typeof input !== "object") return settings
+  for (const kind of [...PEN_KINDS, "eraser" as const]) {
+    const own = (input as Record<string, unknown>)[kind]
+    if (!own || typeof own !== "object") continue
+    const { width, color } = own as Record<string, unknown>
+    settings[kind] = {
+      ...(isFiniteNumber(width) && width > 0 ? { width } : {}),
+      ...(typeof color === "string" ? { color } : {}),
+    }
+  }
+  return settings
+}
+
+const isToolbarPosition = (value: unknown): value is ToolbarPlacement => {
+  if (!value || typeof value !== "object") return false
+  const point = value as Record<string, unknown>
+  return isFiniteNumber(point.x) && isFiniteNumber(point.y)
+}
+
+// Keeps the saved edge, spot and orientation only when they are ones the toolbar knows.
+const normalizeToolbarPlacement = ({ x, y, edge, align, vertical }: ToolbarPlacement): ToolbarPlacement => ({
+  x,
+  y,
+  ...(edge === null || TOOLBAR_SIDES.includes(edge as ToolbarSide) ? { edge } : {}),
+  ...(align === "start" || align === "center" || align === "end" ? { align } : {}),
+  ...(typeof vertical === "boolean" ? { vertical } : {}),
+})
 
 const isRect = (value: unknown): value is { left: number; top: number; width: number; height: number } => {
   if (!value || typeof value !== "object") return false
@@ -164,6 +365,99 @@ const isGuide = (value: unknown): value is Guide => {
   )
 }
 
+const isArrow = (value: unknown): value is Arrow => {
+  if (!value || typeof value !== "object") return false
+  const arrow = value as Record<string, unknown>
+  const start = arrow.start as Record<string, unknown> | undefined
+  const end = arrow.end as Record<string, unknown> | undefined
+  const control = arrow.control as Record<string, unknown> | undefined
+  return (
+    typeof arrow.id === "string" &&
+    isFiniteNumber(start?.x) &&
+    isFiniteNumber(start?.y) &&
+    isFiniteNumber(end?.x) &&
+    isFiniteNumber(end?.y) &&
+    (control === undefined || (isFiniteNumber(control.x) && isFiniteNumber(control.y))) &&
+    typeof arrow.color === "string" &&
+    isFiniteNumber(arrow.width) &&
+    arrow.width > 0
+  )
+}
+
+const isPenStroke = (value: unknown): value is PenStroke => {
+  if (!value || typeof value !== "object") return false
+  const stroke = value as Record<string, unknown>
+  return typeof stroke.id === "string" && typeof stroke.color === "string" && isFiniteNumber(stroke.width) && stroke.width > 0 && Array.isArray(stroke.points) && stroke.points.every((point) => {
+    if (!point || typeof point !== "object") return false
+    const item = point as Record<string, unknown>
+    return isFiniteNumber(item.x) && isFiniteNumber(item.y)
+  })
+}
+
+const isTextAnnotation = (value: unknown): value is TextAnnotation => {
+  if (!value || typeof value !== "object") return false
+  const annotation = value as Record<string, unknown>
+  return (
+    typeof annotation.id === "string" &&
+    isFiniteNumber(annotation.x) &&
+    isFiniteNumber(annotation.y) &&
+    typeof annotation.text === "string" &&
+    annotation.text.length > 0 &&
+    (annotation.scale === undefined || (isFiniteNumber(annotation.scale) && annotation.scale > 0)) &&
+    (annotation.rotation === undefined || isFiniteNumber(annotation.rotation)) &&
+    (annotation.boxWidth === undefined || (isFiniteNumber(annotation.boxWidth) && annotation.boxWidth > 0))
+  )
+}
+
+const isCommentThread = (value: unknown): value is CommentThread => {
+  if (!value || typeof value !== "object") return false
+  const comment = value as Record<string, unknown>
+  const target = comment.target as Record<string, unknown> | undefined
+  const anchor = target?.anchor as Record<string, unknown> | undefined
+  const messages = comment.messages
+  return (
+    typeof comment.id === "string" &&
+    (comment.status === "open" || comment.status === "resolved") &&
+    typeof comment.createdAt === "number" &&
+    typeof comment.updatedAt === "number" &&
+    !!target &&
+    typeof target.selector === "string" &&
+    typeof target.tagName === "string" &&
+    typeof target.textSnippet === "string" &&
+    typeof target.htmlPreview === "string" &&
+    typeof target.styles === "string" &&
+    (target.framePath === undefined || (Array.isArray(target.framePath) && target.framePath.every((selector) => typeof selector === "string"))) &&
+    (target.frameShadowPaths === undefined || (Array.isArray(target.frameShadowPaths) && target.frameShadowPaths.every((path) => Array.isArray(path) && path.every((selector) => typeof selector === "string")))) &&
+    (target.shadowPath === undefined || (Array.isArray(target.shadowPath) && target.shadowPath.every((selector) => typeof selector === "string"))) &&
+    isRect(target.rect) &&
+    (anchor === undefined || (
+      isFiniteNumber(anchor.x) &&
+      isFiniteNumber(anchor.y) &&
+      anchor.x >= 0 &&
+      anchor.x <= 1 &&
+      anchor.y >= 0 &&
+      anchor.y <= 1
+    )) &&
+    !!target.documentPoint &&
+    isFiniteNumber((target.documentPoint as Record<string, unknown>).x) &&
+    isFiniteNumber((target.documentPoint as Record<string, unknown>).y) &&
+    !!target.attributes &&
+    typeof target.attributes === "object" &&
+    Array.isArray(messages) &&
+    messages.every((message) => {
+      if (!message || typeof message !== "object") return false
+      const item = message as Record<string, unknown>
+      return (
+        typeof item.id === "string" &&
+        item.role === "user" &&
+        typeof item.text === "string" &&
+        item.text.length > 0 &&
+        typeof item.createdAt === "number"
+      )
+    })
+  )
+}
+
 const isDistanceOverlay = (value: unknown): value is DistanceOverlay => {
   if (!value || typeof value !== "object") return false
   const distance = value as Record<string, unknown>
@@ -181,6 +475,10 @@ const isDistanceOverlay = (value: unknown): value is DistanceOverlay => {
   }
   return (
     typeof distance.id === "string" &&
+    (!("guideIds" in distance) ||
+      (Array.isArray(distance.guideIds) &&
+        distance.guideIds.length <= 2 &&
+        distance.guideIds.every((guideId) => guideId === null || typeof guideId === "string"))) &&
     isRect(distance.rectA) &&
     isRect(distance.rectB) &&
     isNormalizedRect(distance.normalizedRectA) &&
@@ -200,9 +498,20 @@ export const normalizeStoredSettings = (value: unknown): MesurerStoredSettings =
   if (!value || typeof value !== "object") return {}
   const input = value as Record<string, unknown>
   return {
+    ...(input.lastToolMode === "select" || input.lastToolMode === "selection" || input.lastToolMode === "guides" || input.lastToolMode === "arrows" || input.lastToolMode === "pen" || input.lastToolMode === "text"
+      ? { lastToolMode: input.lastToolMode }
+      : {}),
+    ...(isToolbarPosition(input.toolbarPosition) ? { toolbarPosition: normalizeToolbarPlacement(input.toolbarPosition) } : {}),
+    ...(isToolbarDock(input.toolbarDock) ? { toolbarDock: input.toolbarDock } : {}),
+    ...(typeof input.toolbarAutoHide === "boolean" ? { toolbarAutoHide: input.toolbarAutoHide } : {}),
+    ...(isPenChoice(input.penKind) ? { penKind: input.penKind } : {}),
+    ...(input.penSettings ? { penSettings: normalizePenSettings(input.penSettings) } : {}),
     ...(typeof input.highlightColor === "string" ? { highlightColor: input.highlightColor } : {}),
     ...(typeof input.guideColor === "string" ? { guideColor: input.guideColor } : {}),
+    ...(typeof input.arrowColor === "string" ? { arrowColor: input.arrowColor } : {}),
+    ...(typeof input.guideHighlightEnabled === "boolean" ? { guideHighlightEnabled: input.guideHighlightEnabled } : {}),
     ...(typeof input.hoverHighlightEnabled === "boolean" ? { hoverHighlightEnabled: input.hoverHighlightEnabled } : {}),
+    ...(typeof input.layoutDetailsEnabled === "boolean" ? { layoutDetailsEnabled: input.layoutDetailsEnabled } : {}),
     ...(Array.isArray(input.colorPickerFormats) && input.colorPickerFormats.some(isFormat)
       ? { colorPickerFormats: input.colorPickerFormats.filter(isFormat) }
       : {}),
@@ -211,39 +520,119 @@ export const normalizeStoredSettings = (value: unknown): MesurerStoredSettings =
       : {}),
     ...(typeof input.snapEnabled === "boolean" ? { snapEnabled: input.snapEnabled } : {}),
     ...(typeof input.snapGuidesEnabled === "boolean" ? { snapGuidesEnabled: input.snapGuidesEnabled } : {}),
+    ...(typeof input.snapArrowsEnabled === "boolean" ? { snapArrowsEnabled: input.snapArrowsEnabled } : {}),
+    ...(typeof input.arrowClickToPlace === "boolean" ? { arrowClickToPlace: input.arrowClickToPlace } : {}),
     ...(typeof input.selectNewGuideEnabled === "boolean" ? { selectNewGuideEnabled: input.selectNewGuideEnabled } : {}),
     ...(typeof input.multiMeasureEnabled === "boolean" ? { multiMeasureEnabled: input.multiMeasureEnabled } : {}),
+    ...(input.infoCardMode === "hover" || input.infoCardMode === "click"
+      ? { infoCardMode: input.infoCardMode }
+      : input.copySelectorOnInspect === true
+        ? { infoCardMode: "click" as const }
+        : {}),
     ...(typeof input.persistOnReload === "boolean" ? { persistOnReload: input.persistOnReload } : {}),
+    shortcutsEnabled:
+      typeof input.shortcutsEnabled === "boolean" ? input.shortcutsEnabled : true,
+    ...(input.theme === "system" || input.theme === "light" || input.theme === "dark" ? { theme: input.theme } : {}),
     ...(normalizeGuideStyle(input.guideStyle) ? { guideStyle: normalizeGuideStyle(input.guideStyle) } : {}),
     ...(normalizeRulerSettings(input.rulerSettings) ? { rulerSettings: normalizeRulerSettings(input.rulerSettings) } : {}),
+    ...(normalizeScreenshotSettings(input.screenshotSettings)
+      ? { screenshotSettings: normalizeScreenshotSettings(input.screenshotSettings) }
+      : {}),
+    ...(normalizeTextStyle(input.textStyle) ? { textStyle: normalizeTextStyle(input.textStyle) } : {}),
   }
 }
 
-export const normalizeStoredWorkspace = (value: unknown): MesurerStoredWorkspace | null => {
+const isStoredToolMode = (value: unknown): value is ToolMode | "text-inspector" =>
+  value === "none" ||
+  value === "select" ||
+  value === "selection" ||
+  value === "guides" ||
+  value === "text-inspector" ||
+  value === "xray" ||
+  value === "rulers" ||
+  value === "arrows" ||
+  value === "pen" ||
+  value === "text" ||
+  value === "comments"
+
+export const normalizeSessionChrome = (value: unknown): MesurerSessionChrome | null => {
   if (!value || typeof value !== "object") return null
   const input = value as Record<string, unknown>
   if (
     typeof input.enabled !== "boolean" ||
-    (input.toolMode !== "none" && input.toolMode !== "select" && input.toolMode !== "guides" && input.toolMode !== "text-inspector" && input.toolMode !== "xray" && input.toolMode !== "rulers") ||
+    !isStoredToolMode(input.toolMode) ||
     typeof input.rulersVisible !== "boolean" ||
-    (input.guideOrientation !== "vertical" && input.guideOrientation !== "horizontal") ||
+    (input.guideOrientation !== "vertical" && input.guideOrientation !== "horizontal")
+  ) return null
+  const toolMode = input.toolMode === "text-inspector" ? "select" : input.toolMode
+  return {
+    enabled: input.enabled,
+    ...(typeof input.minimized === "boolean" ? { minimized: input.minimized } : {}),
+    xrayVisible: typeof input.xrayVisible === "boolean" ? input.xrayVisible : input.toolMode === "xray",
+    toolMode,
+    rulersVisible: input.rulersVisible,
+    guideOrientation: input.guideOrientation,
+  }
+}
+
+export const normalizePageArtifacts = (value: unknown): MesurerPageArtifacts | null => {
+  if (!value || typeof value !== "object") return null
+  const input = value as Record<string, unknown>
+  if (
     !Array.isArray(input.guides) ||
     !Array.isArray(input.selectedGuideIds) ||
     !Array.isArray(input.measurements) ||
     !Array.isArray(input.heldDistances)
   ) return null
   return {
-    enabled: input.enabled,
-    xrayVisible: typeof input.xrayVisible === "boolean" ? input.xrayVisible : input.toolMode === "xray",
-    toolMode: input.toolMode,
-    rulersVisible: input.rulersVisible,
-    guideOrientation: input.guideOrientation,
     guides: input.guides.filter(isGuide),
     selectedGuideIds: input.selectedGuideIds.filter((id): id is string => typeof id === "string"),
+    arrows: Array.isArray(input.arrows) ? input.arrows.filter(isArrow) : [],
+    selectedArrowIds: Array.isArray(input.selectedArrowIds)
+      ? input.selectedArrowIds.filter((id): id is string => typeof id === "string")
+      : [],
+    selectedPenStrokeIds: Array.isArray(input.selectedPenStrokeIds)
+      ? input.selectedPenStrokeIds.filter((id): id is string => typeof id === "string")
+      : [],
+    selectedTextIds: Array.isArray(input.selectedTextIds)
+      ? input.selectedTextIds.filter((id): id is string => typeof id === "string")
+      : [],
+    penStrokes: Array.isArray(input.penStrokes) ? input.penStrokes.filter(isPenStroke) : [],
+    // A note's style is read as the settings' is: what cannot be read of it takes the default.
+    textAnnotations: Array.isArray(input.textAnnotations)
+      ? input.textAnnotations.filter(isTextAnnotation).map(({ style, ...note }) => {
+          const read = normalizeTextStyle(style)
+          return read ? { ...note, style: read } : note
+        })
+      : [],
     measurements: input.measurements.filter(isMeasurement),
     activeMeasurement: isMeasurement(input.activeMeasurement) ? input.activeMeasurement : null,
     heldDistances: input.heldDistances.filter(isDistanceOverlay),
+    comments: Array.isArray(input.comments) ? input.comments.filter(isCommentThread) : [],
+    layoutGuides: normalizeLayoutGuides(input.layoutGuides),
   }
+}
+
+export const normalizePagedWorkspaceStore = (value: unknown): PagedWorkspaceStore | null => {
+  if (!isPagedWorkspaceStore(value)) return null
+  const pages: Record<string, MesurerPageArtifacts | null> = {}
+  for (const [key, page] of Object.entries(value.pages)) {
+    pages[key] = normalizePageArtifacts(page)
+  }
+  const chrome =
+    normalizeSessionChrome(value) ??
+    Object.values(value.pages)
+      .map((page) => normalizeSessionChrome(page))
+      .find((item): item is MesurerSessionChrome => item !== null) ??
+    DEFAULT_SESSION_CHROME
+  return { ...chrome, pages }
+}
+
+export const normalizeStoredWorkspace = (value: unknown): MesurerStoredWorkspace | null => {
+  const chrome = normalizeSessionChrome(value)
+  const artifacts = normalizePageArtifacts(value)
+  if (!chrome || !artifacts) return null
+  return { ...chrome, ...artifacts }
 }
 
 export const normalizePersistenceSnapshot = (
@@ -254,7 +643,10 @@ export const normalizePersistenceSnapshot = (
   if (record.version !== MESURER_STORAGE_VERSION) return null
   return {
     settings: normalizeStoredSettings(record.settings),
-    workspace: normalizeStoredWorkspace(record.workspace),
+    workspace: isPagedWorkspaceStore(record.workspace)
+      ? normalizePagedWorkspaceStore(record.workspace)
+      : normalizeStoredWorkspace(record.workspace),
+    ...(isPersistenceRevision(record.revision) ? { revision: record.revision } : {}),
   }
 }
 
@@ -284,6 +676,12 @@ const migrate = (record: StoredRecord): MesurerPersistenceSnapshot | null => {
             guideOrientation: record.guideOrientation,
             guides: record.guides,
             selectedGuideIds: record.selectedGuideIds,
+            arrows: [],
+             selectedArrowIds: [],
+             selectedPenStrokeIds: [],
+             selectedTextIds: [],
+             penStrokes: [],
+             textAnnotations: [],
             measurements: record.measurements,
             activeMeasurement: record.activeMeasurement,
             heldDistances: record.heldDistances,
@@ -298,6 +696,8 @@ export const createLocalStoragePersistence = (
   legacyKey?: string,
 ): MesurerPersistence => {
   let errorHandler: ((error: unknown) => void) | undefined
+  const writerId = createWriterId()
+  let lastRevision: PersistenceRevision | undefined
   const readRecord = (key: string): MesurerPersistenceSnapshot | null => {
     try {
       const raw = ownerWindow.localStorage.getItem(key)
@@ -314,10 +714,24 @@ export const createLocalStoragePersistence = (
     const settingsRecord = readRecord(settingsKey)
     const workspaceRecord = readRecord(workspaceKey)
     if (!settingsRecord && !workspaceRecord && !legacy) return null
+    const revision = latestRevision(
+      settingsRecord?.revision,
+      workspaceRecord?.revision,
+      legacy?.revision,
+    )
     return {
       settings: settingsRecord?.settings ?? legacy?.settings ?? {},
       workspace: workspaceRecord?.workspace ?? legacy?.workspace ?? null,
+      ...(revision ? { revision } : {}),
     }
+  }
+
+  const nextRevision = () => {
+    const current = read()?.revision
+    const previous = compareRevisions(current, lastRevision) > 0 ? current : lastRevision
+    const revision = createNextRevision(previous, writerId)
+    lastRevision = revision
+    return revision
   }
 
   const writeRecord = (key: string, snapshot: MesurerPersistenceSnapshot) => {
@@ -333,35 +747,43 @@ export const createLocalStoragePersistence = (
   }
 
   return {
-    load: read,
+    load: () => {
+      const snapshot = read()
+      lastRevision = snapshot?.revision
+      return snapshot
+    },
     saveSettings: (settings) => {
+      const revision = nextRevision()
       if (settingsKey === workspaceKey) {
-        writeRecord(workspaceKey, { settings, workspace: read()?.workspace ?? null })
+        writeRecord(workspaceKey, { settings, workspace: read()?.workspace ?? null, revision })
         return
       }
-      writeRecord(settingsKey, { settings, workspace: null })
+      writeRecord(settingsKey, { settings, workspace: null, revision })
     },
     saveWorkspace: (workspace) => {
+      const revision = nextRevision()
       if (settingsKey === workspaceKey) {
-        writeRecord(workspaceKey, { settings: read()?.settings ?? {}, workspace })
+        writeRecord(workspaceKey, { settings: read()?.settings ?? {}, workspace, revision })
         return
       }
-      writeRecord(workspaceKey, { settings: {}, workspace })
+      writeRecord(workspaceKey, { settings: {}, workspace, revision })
     },
     clearWorkspace: () => {
+      const revision = nextRevision()
       if (settingsKey === workspaceKey) {
         const current = read()
-        if (current) writeRecord(workspaceKey, { settings: current.settings, workspace: null })
+        if (current) writeRecord(workspaceKey, { settings: current.settings, workspace: null, revision })
         return
       }
-      writeRecord(workspaceKey, { settings: {}, workspace: null })
+      writeRecord(workspaceKey, { settings: {}, workspace: null, revision })
     },
     clearSettings: () => {
+      const revision = nextRevision()
       if (settingsKey === workspaceKey) {
-        writeRecord(workspaceKey, { settings: {}, workspace: read()?.workspace ?? null })
+        writeRecord(workspaceKey, { settings: {}, workspace: read()?.workspace ?? null, revision })
         return
       }
-      writeRecord(settingsKey, { settings: {}, workspace: null })
+      writeRecord(settingsKey, { settings: {}, workspace: null, revision })
     },
     setErrorHandler: (handler) => {
       errorHandler = handler
@@ -369,7 +791,10 @@ export const createLocalStoragePersistence = (
     subscribe: (listener) => {
       const handleStorage = (event: StorageEvent) => {
         if (event.key !== settingsKey && event.key !== workspaceKey && event.key !== legacyKey) return
-        listener(read(), {
+        const next = read()
+        if (compareRevisions(next?.revision, lastRevision) <= 0) return
+        lastRevision = next?.revision
+        listener(next, {
           settings: event.key === settingsKey || event.key === legacyKey || settingsKey === workspaceKey,
           workspace: event.key === workspaceKey || event.key === legacyKey || settingsKey === workspaceKey,
         })
@@ -378,6 +803,74 @@ export const createLocalStoragePersistence = (
       return () => {
         ownerWindow.removeEventListener("storage", handleStorage)
       }
+    },
+  }
+}
+
+export const createPageScopedPersistence = (
+  base: MesurerPersistence,
+  getPageKey: () => string,
+): MesurerPersistence => {
+  const envelopeFrom = (workspace: MesurerPersistenceSnapshot["workspace"]): PagedWorkspaceStore | null => {
+    if (isPagedWorkspaceStore(workspace)) return normalizePagedWorkspaceStore(workspace)
+    const flat = normalizeStoredWorkspace(workspace)
+    if (!flat) return null
+    return {
+      ...toSessionChrome(flat),
+      pages: { [getPageKey()]: toPageArtifacts(flat) },
+    }
+  }
+
+  const workspaceForPage = (workspace: MesurerPersistenceSnapshot["workspace"]): MesurerStoredWorkspace | null => {
+    const envelope = envelopeFrom(workspace)
+    if (!envelope) return null
+    return mergeWorkspace(envelope, envelope.pages[getPageKey()])
+  }
+
+  const readEnvelope = (): PagedWorkspaceStore | null => envelopeFrom(base.load()?.workspace ?? null)
+
+  return {
+    load: () => {
+      const snapshot = base.load()
+      if (!snapshot) return null
+      return {
+        settings: snapshot.settings,
+        workspace: workspaceForPage(snapshot.workspace),
+      }
+    },
+    saveSettings: (settings) => base.saveSettings(settings),
+    saveWorkspace: (workspace) => {
+      const current = readEnvelope()
+      const incoming = isPagedWorkspaceStore(workspace)
+        ? normalizePagedWorkspaceStore(workspace)
+        : null
+      const flat = incoming ? null : normalizeStoredWorkspace(workspace)
+      const chrome = toSessionChrome(incoming ?? flat ?? current ?? DEFAULT_SESSION_CHROME)
+      const pages = {
+        ...(current?.pages ?? {}),
+        ...(incoming?.pages ?? {}),
+      }
+      if (flat) pages[getPageKey()] = toPageArtifacts(flat)
+      base.saveWorkspace({ ...chrome, pages })
+    },
+    clearWorkspace: () => base.clearWorkspace(),
+    clearSettings: () => base.clearSettings(),
+    setErrorHandler: (handler) => base.setErrorHandler?.(handler),
+    subscribe: (listener) => {
+      if (!base.subscribe) return () => {}
+      return base.subscribe((snapshot, source) => {
+        if (!snapshot) {
+          listener(null, source)
+          return
+        }
+        listener(
+          {
+            settings: snapshot.settings,
+            workspace: workspaceForPage(snapshot.workspace),
+          },
+          source,
+        )
+      })
     },
   }
 }

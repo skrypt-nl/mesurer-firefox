@@ -1,0 +1,2106 @@
+"use client";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type SetStateAction,
+} from "react";
+import {
+  SettingsPanel,
+  settingsFocusSection,
+  type SettingsFocusSection,
+} from "./components/settings-panel";
+import { ColorPanel } from "./components/color-panel";
+import { MesurerPortal } from "./components/mesurer-portal";
+import { useColorPicker } from "./hooks/use-color-picker";
+import { useGuideDragHold } from "./hooks/use-guide-drag-hold";
+import { useGuideWindowEvents } from "./hooks/use-guide-window-events";
+import { useInteractionLifecycle } from "./hooks/use-interaction-lifecycle";
+import { useWorkspaceLifecycle } from "./hooks/use-workspace-lifecycle";
+import { useOverlayPointerHandlers } from "./hooks/use-overlay-pointer-handlers";
+import { useLiveElementTracking } from "./hooks/use-live-element-tracking";
+import { useMesurerDerived } from "./hooks/use-mesurer-derived";
+import { useMesurerHistory } from "./hooks/use-mesurer-history";
+import { useMesurerSettings } from "./hooks/use-mesurer-settings";
+import { useMesurerWorkspaceState } from "./hooks/use-mesurer-workspace-state";
+import { useMesurerPointer } from "./hooks/use-mesurer-pointer";
+import { usePersistenceLifecycle } from "./hooks/use-persistence-lifecycle";
+import { useResizeSync } from "./hooks/use-resize-sync";
+import { useRulerGuides } from "./hooks/use-ruler-guides";
+import { useScreenshot } from "./hooks/use-screenshot";
+import { useScreenRecording } from "./hooks/use-screen-recording";
+import { usePlayableMotion } from "./hooks/use-playable-motion";
+import { InspectInfoCard } from "./components/inspect-info-card";
+import { ScreenRecordingEditor, ScreenRecordingTimer } from "./components/screen-recording";
+import { useSelectionAnimationCleanup } from "./hooks/use-selection-animation-cleanup";
+import { useSelectedTypography } from "./hooks/use-selected-typography";
+import { useSelectorCopy } from "./hooks/use-selector-copy";
+import { useScrollOffset } from "./hooks/use-scroll-offset";
+import { useCommentRuntime } from "./hooks/use-comment-runtime";
+import { useSettingsDismiss } from "./hooks/use-settings-dismiss";
+import { useXray } from "./hooks/use-xray";
+import { useArrowsPointer } from "./hooks/use-arrows-pointer";
+import { usePenPointer } from "./hooks/use-pen-pointer";
+import { copyCommentsForAgent, useCommentPointer } from "./comments";
+import { removePreviewSelection, scrollElementIntoView } from "./core/responsive";
+import { ERASER_WIDTH, PEN_KINDS, penInHand } from "./core/ink";
+import { createLayoutGuide, type LayoutGuide } from "./core/layout-guides";
+import { getRectFromPoints } from "./core/geometry";
+import { attachPinnedGuideTarget } from "./core/distances";
+import { useAnnotationSelection } from "./hooks/use-annotation-selection";
+import { useAnnotationCallbacks } from "./hooks/use-annotation-callbacks";
+import type { ColorPickerFormat } from "./core/colors";
+import type { CommentThread, Rect, ToolMode } from "./core/types";
+import type { CommentFilter } from "./comments/types";
+
+export type ExtensionRecordingSession = {
+  prepare: () => Promise<void>;
+  start: (input: { rect: { left: number; top: number; width: number; height: number }; viewport: { width: number; height: number } }) => Promise<void>;
+  stop: () => Promise<{ id: string; duration: number }>;
+  abort: () => void;
+  dispose?: () => void;
+};
+import {
+  type MesurerPersistence,
+  type MesurerStoredWorkspace,
+  type GuideStyle,
+  type RulerSettings,
+  type ThemeMode,
+} from "./core/persistence";
+import type { TextStyleSettings } from "./core/text-style";
+import type { MesurerFeatures, ResolvedMesurerFeatures } from "./core/features";
+import { useMesurerStorage } from "./hooks/use-mesurer-storage";
+import { usePageWorkspaceSwitch } from "./hooks/use-page-workspace-switch";
+import {
+  createReviewStateFromWorkspace,
+  createReviewViewer as createDefaultReviewViewer,
+  captureReviewSnapshot,
+  saveReviewViewer,
+  showReviewLoading as showDefaultReviewLoading,
+  type CapturedReviewImage,
+  type CreateReviewViewer,
+  type ReviewPublication,
+} from "./core/review";
+
+const collectReviewComments = (
+  comments: CommentThread[],
+  rects: ReadonlyMap<string, Rect>,
+  pins: NodeListOf<HTMLElement> | undefined,
+  ownerWindow: Window,
+) => comments.map((comment, index) => {
+  const targetRect = rects.get(comment.id) ?? comment.target.rect;
+  const pinRect = pins?.[index]?.getBoundingClientRect();
+  return {
+    ...comment,
+    target: {
+      ...comment.target,
+      rect: targetRect,
+      documentPoint: pinRect
+        ? { x: pinRect.left + pinRect.width / 2 + ownerWindow.scrollX, y: pinRect.top + pinRect.height / 2 + ownerWindow.scrollY }
+        : {
+          x: targetRect.left + targetRect.width * (comment.target.anchor?.x ?? 1) + ownerWindow.scrollX,
+          y: targetRect.top + targetRect.height * (comment.target.anchor?.y ?? 0) + ownerWindow.scrollY,
+        },
+    },
+  };
+});
+
+const collectReviewTextAnnotations = <T extends { id: string; text: string }>(
+  annotations: T[],
+  overlay: HTMLElement | undefined,
+) => {
+  const result = [...annotations];
+  for (const element of overlay?.querySelectorAll<HTMLElement>("[data-mesurer-text]") ?? []) {
+    const id = element.dataset.mesurerTextId;
+    const index = id ? result.findIndex((annotation) => annotation.id === id) : -1;
+    const textNode = element.querySelector<HTMLElement>("[data-mesurer-text-input]") ?? element;
+    if (index >= 0) result[index] = { ...result[index], text: textNode.textContent ?? result[index].text };
+  }
+  return result;
+};
+
+export type MesurerProps = {
+  highlightColor?: string;
+  guideColor?: string;
+  arrowColor?: string;
+  guideHighlightEnabled?: boolean;
+  hoverHighlightEnabled?: boolean;
+  layoutDetailsEnabled?: boolean;
+  persistOnReload?: boolean;
+  persistSession?: boolean;
+  shortcutsEnabled?: boolean;
+  theme?: ThemeMode;
+  portalTarget?: HTMLElement | ShadowRoot;
+  persistKey?: string;
+  colorPickerFormats?: ColorPickerFormat[];
+  colorPickerClickFormat?: ColorPickerFormat;
+  snapEnabled?: boolean;
+  snapGuidesEnabled?: boolean;
+  snapArrowsEnabled?: boolean;
+  arrowClickToPlace?: boolean;
+  selectNewGuideEnabled?: boolean;
+  multiMeasureEnabled?: boolean;
+  guideStyle?: Partial<GuideStyle>;
+  rulerSettings?: Partial<RulerSettings>;
+  textStyle?: Partial<TextStyleSettings>;
+  persistence?: MesurerPersistence;
+  onPersistenceError?: (error: unknown) => void;
+  captureVisibleTab?: () => Promise<Blob>;
+  captureDom?: ((ownerDocument: Document, ownerWindow: Window) => Promise<CapturedReviewImage>) | false;
+  /** Builds a saved review's viewer page, for a host that loads that code on demand. */
+  createReviewViewer?: CreateReviewViewer;
+  /**
+   * Keeps a saved review, and gives the address it opens at. Without it the review's own page
+   * is kept in this site's storage and opened on this site, which only a site that serves the
+   * viewer can do.
+   */
+  publishReview?: (review: ReviewPublication) => Promise<string>;
+  /** Fills the tab a review will open in while it is made, for a host that loads that code on demand. */
+  showReviewLoading?: (view: Window) => void;
+  extensionRecording?: ExtensionRecordingSession;
+  extensionRecordingPlayer?: string;
+  features?: MesurerFeatures;
+  reviewState?: import("./core/review").ReviewState;
+  initialState?: {
+    enabled?: boolean;
+    minimized?: boolean;
+    toolMode?: ToolMode;
+    toolbarPosition?: { x: number; y: number };
+    xrayVisible?: boolean;
+    rulersVisible?: boolean;
+    guideOrientation?: "vertical" | "horizontal";
+    guides?: MesurerStoredWorkspace["guides"];
+    selectedGuideIds?: string[];
+    arrows?: MesurerStoredWorkspace["arrows"];
+    selectedArrowIds?: string[];
+    penStrokes?: MesurerStoredWorkspace["penStrokes"];
+    selectedPenStrokeIds?: string[];
+    textAnnotations?: MesurerStoredWorkspace["textAnnotations"];
+    selectedTextIds?: string[];
+    measurements?: MesurerStoredWorkspace["measurements"];
+    activeMeasurement?: MesurerStoredWorkspace["activeMeasurement"];
+    heldDistances?: MesurerStoredWorkspace["heldDistances"];
+    comments?: CommentThread[];
+    layoutGuides?: MesurerStoredWorkspace["layoutGuides"];
+  };
+};
+export function MesurerClient({
+  highlightColor,
+  guideColor,
+  arrowColor,
+  guideHighlightEnabled,
+  hoverHighlightEnabled,
+  layoutDetailsEnabled,
+  persistOnReload,
+  persistSession = false,
+  shortcutsEnabled: shortcutsEnabledDefault,
+  theme: themeDefault,
+  portalTarget,
+  persistKey,
+  colorPickerFormats,
+  colorPickerClickFormat,
+  snapEnabled: snapEnabledDefault,
+  snapGuidesEnabled: snapGuidesEnabledDefault,
+  snapArrowsEnabled: snapArrowsEnabledDefault,
+  arrowClickToPlace: arrowClickToPlaceDefault,
+  selectNewGuideEnabled: selectNewGuideEnabledDefault,
+  multiMeasureEnabled: multiMeasureEnabledDefault,
+  guideStyle: guideStyleDefault,
+  rulerSettings: rulerSettingsDefault,
+  textStyle: textStyleDefault,
+  persistence,
+  onPersistenceError,
+  captureVisibleTab,
+  captureDom,
+  createReviewViewer,
+  publishReview,
+  showReviewLoading,
+  extensionRecording,
+  extensionRecordingPlayer,
+  features,
+  initialState,
+  reviewState,
+}: Required<
+  Omit<
+    MesurerProps,
+    | "persistKey"
+    | "persistSession"
+    | "persistence"
+    | "onPersistenceError"
+    | "guideStyle"
+    | "rulerSettings"
+    | "textStyle"
+    | "captureVisibleTab"
+    | "captureDom"
+    | "createReviewViewer"
+    | "publishReview"
+    | "showReviewLoading"
+    | "extensionRecording"
+    | "extensionRecordingPlayer"
+    | "features"
+    | "initialState"
+    | "reviewState"
+  >
+> &
+  Pick<
+    MesurerProps,
+    | "persistKey"
+    | "persistSession"
+    | "persistence"
+    | "onPersistenceError"
+    | "captureVisibleTab"
+    | "captureDom"
+    | "createReviewViewer"
+    | "publishReview"
+    | "showReviewLoading"
+    | "extensionRecording"
+    | "extensionRecordingPlayer"
+    | "initialState"
+    | "reviewState"
+  > & {
+    guideStyle: GuideStyle;
+    rulerSettings: RulerSettings;
+    textStyle: TextStyleSettings;
+    features: ResolvedMesurerFeatures;
+  }) {
+  const ownerDocument = portalTarget.ownerDocument ?? document;
+  const ownerWindow = ownerDocument.defaultView ?? window;
+  const {
+    pageKey,
+    appliedPageKeyRef,
+    pageWorkspacesRef,
+    activePersistence,
+    storedState,
+    persistedState,
+    persistedSettings,
+  } = useMesurerStorage({ ownerWindow, persistKey, persistence, persistOnReload, persistSession });
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const persistenceErrorHandlerRef = useRef(onPersistenceError);
+  persistenceErrorHandlerRef.current = onPersistenceError;
+  const closeScreenshotRef = useRef<() => void>(() => {});
+  const clearWorkspaceTransientRef = useRef<() => void>(() => {});
+  const cancelArrowInteractionRef = useRef<() => void>(() => {});
+  const hasArrowInteractionRef = useRef<() => boolean>(() => false);
+  const cancelPenInteractionRef = useRef<() => void>(() => {});
+  const hasPenInteractionRef = useRef<() => boolean>(() => false);
+  const workspacePersistTimeoutRef = useRef<number | null>(null);
+  const applyingExternalPersistenceRef = useRef(false);
+  const persistCommentsRef = useRef<(comments: CommentThread[]) => void>(() => {});
+  const workspace = useMesurerWorkspaceState({
+    persistedState: reviewState ? null : persistedState,
+    initialToolMode: persistedSettings.lastToolMode ?? "select",
+    snapEnabledDefault: persistedSettings.snapEnabled ?? snapEnabledDefault,
+    snapGuidesEnabledDefault:
+      persistedSettings.snapGuidesEnabled ?? snapGuidesEnabledDefault,
+    snapArrowsEnabledDefault:
+      persistedSettings.snapArrowsEnabled ?? snapArrowsEnabledDefault,
+    arrowClickToPlaceDefault:
+      persistedSettings.arrowClickToPlace ?? arrowClickToPlaceDefault,
+    selectNewGuideEnabledDefault:
+      persistedSettings.selectNewGuideEnabled ?? selectNewGuideEnabledDefault,
+    multiMeasureEnabledDefault:
+      persistedSettings.multiMeasureEnabled ?? multiMeasureEnabledDefault,
+    initialState,
+    initialComments: reviewState ? initialState?.comments : persistedState?.comments ?? initialState?.comments,
+    onCommentsChange: (value) => persistCommentsRef.current(value),
+  });
+  const [commentFilter, setCommentFilter] = useState<CommentFilter>("open");
+  const {
+    selectionRectRef,
+    enabledRef,
+    toolModeRef,
+    rulersVisibleRef,
+    xrayVisibleRef,
+    guideOrientationRef,
+    measurementsRef,
+    activeMeasurementRef,
+    heldDistancesRef,
+    guidesRef,
+    selectedGuideIdsRef,
+    arrowsRef,
+    selectedArrowIdsRef,
+    penStrokesRef,
+    selectedPenStrokeIdsRef,
+    penStrokes,
+    selectedPenStrokeIds,
+    setSelectedPenStrokeIds,
+    penPreview,
+    setPenPreview,
+    textAnnotationsRef,
+    selectedTextIdsRef,
+    overlayRef,
+    selectedElementRef,
+    hoverElementRef,
+    selectionOriginRect,
+    setSelectionOriginRect,
+    hoverPointer,
+    setHoverPointer,
+    hoverElement,
+    setHoverElement,
+    selectedElement,
+    setSelectedElement,
+    clearSelectionRect,
+    enabled,
+    setEnabled,
+    holdEnabled,
+    snapEnabled,
+    altPressed,
+    setAltPressed,
+    toolMode,
+    setToolMode,
+    rulersVisible,
+    setRulersVisible,
+    guidesEnabled,
+    multiMeasureEnabled,
+    snapGuidesEnabled,
+    setSnapGuidesEnabled,
+    snapArrowsEnabled,
+    setSnapArrowsEnabled,
+    arrowClickToPlace,
+    setArrowClickToPlace,
+    selectNewGuideEnabled,
+    setSelectNewGuideEnabled,
+    setSnapEnabled,
+    setMultiMeasureEnabled,
+    start,
+    setStart,
+    end,
+    setEnd,
+    isDragging,
+    setIsDragging,
+    activeMeasurement,
+    measurements,
+    selectedMeasurement,
+    setSelectedMeasurement,
+    selectedMeasurements,
+    setSelectedMeasurements,
+    hoverRect,
+    setHoverRect,
+    heldDistances,
+    guides,
+    setGuides,
+    draggingGuideId,
+    setDraggingGuideId,
+    selectedGuideIds,
+    arrows,
+    selectedArrowIds,
+    textAnnotations,
+    textDraft,
+    setTextDraft,
+    selectedTextIds,
+    setSelectedTextIds,
+    arrowStart,
+    setArrowStart,
+    arrowMiddle,
+    setArrowMiddle,
+    arrowPreviewEnd,
+    setArrowPreviewEnd,
+    toolbarActive,
+    setToolbarActive,
+    minimizedRef,
+    minimized,
+    settingsOpen,
+    setSettingsOpen,
+    openMenu,
+    setOpenMenu,
+    xrayVisible,
+    setXrayVisible,
+    guideOrientation,
+    setGuideOrientation,
+    comments,
+    selectedId: selectedCommentId,
+    setSelectedId: setSelectedCommentId,
+    draft: commentDraft,
+    createDraft: createCommentDraft,
+    cancelDraft: cancelCommentDraft,
+    commitDraft: commitCommentDraft,
+    addMessage: addCommentMessage,
+    deleteComment,
+    deleteAllComments,
+    resolveAllComments,
+    deleteMessage: deleteCommentMessage,
+    toggleResolved: toggleCommentResolved,
+    updateTarget: updateCommentTarget,
+    updateMessage: updateCommentMessage,
+    layoutGuides,
+    layoutGuidesRef,
+  } = workspace;
+  const copyAllComments = async () => {
+    const copied = await copyCommentsForAgent(comments, ownerWindow);
+    if (copied) ownerWindow.dispatchEvent(new Event("mesurer:comments-copied"));
+    return copied;
+  };
+  const resolveAllCommentsWithFeedback = () => {
+    if (!comments.some((comment) => comment.status === "open")) return;
+    resolveAllComments();
+    ownerWindow.dispatchEvent(new Event("mesurer:comments-resolved"));
+  };
+  const setCommentFilterAndSelection = useCallback((filter: CommentFilter) => {
+    setCommentFilter(filter);
+    const selectedComment = comments.find((comment) => comment.id === selectedCommentId);
+    if (selectedComment && filter !== "all" && selectedComment.status !== filter) {
+      setSelectedCommentId(null);
+    }
+  }, [comments, selectedCommentId]);
+  const dismissSettings = useCallback(() => {
+    setOpenMenu(null);
+    setSettingsOpen(false);
+  }, [setOpenMenu, setSettingsOpen]);
+  useSettingsDismiss(ownerWindow, settingsOpen, dismissSettings);
+  const { runtime: commentRuntime, snapshot: commentRuntimeSnapshot } =
+    useCommentRuntime(comments, ownerDocument, ownerWindow);
+  const commentPointer = useCommentPointer({
+    overlayRef,
+    ownerDocument,
+    ownerWindow,
+    runtime: commentRuntime,
+    state: {
+      draft: commentDraft,
+      createDraft: createCommentDraft,
+      cancelDraft: cancelCommentDraft,
+      commitDraft: commitCommentDraft,
+      updateTarget: updateCommentTarget,
+    },
+  });
+  const textDraftInputRef = useRef<HTMLElement | null>(null);
+  const textDraftRef = useRef(textDraft);
+  const committedTextEditorsRef = useRef(new WeakSet<HTMLElement>());
+  const suppressTextCreateRef = useRef(false);
+  textDraftRef.current = textDraft;
+  const settings = useMesurerSettings({
+    activePersistence,
+    persistedSettings,
+    defaults: {
+      highlightColor,
+      guideColor,
+      arrowColor,
+      guideHighlightEnabled,
+      hoverHighlightEnabled,
+      layoutDetailsEnabled,
+      infoCardMode: "click",
+      persistOnReload,
+      shortcutsEnabled: shortcutsEnabledDefault,
+      theme: themeDefault,
+      colorPickerFormats,
+      colorPickerClickFormat,
+      guideStyle: guideStyleDefault,
+      rulerSettings: rulerSettingsDefault,
+      textStyle: textStyleDefault,
+      snapEnabled: snapEnabledDefault,
+      snapGuidesEnabled: snapGuidesEnabledDefault,
+      snapArrowsEnabled: snapArrowsEnabledDefault,
+      arrowClickToPlace: arrowClickToPlaceDefault,
+      selectNewGuideEnabled: selectNewGuideEnabledDefault,
+      multiMeasureEnabled: multiMeasureEnabledDefault,
+    },
+    toggles: {
+      snapEnabled,
+      setSnapEnabled,
+      snapGuidesEnabled,
+      setSnapGuidesEnabled,
+      snapArrowsEnabled,
+      setSnapArrowsEnabled,
+      arrowClickToPlace,
+      setArrowClickToPlace,
+      selectNewGuideEnabled,
+      setSelectNewGuideEnabled,
+      multiMeasureEnabled,
+      setMultiMeasureEnabled,
+    },
+  });
+  const { resetSettings, persistSettings, applyPersistedSettings } = settings;
+  const workspaceLifecycle = useWorkspaceLifecycle({
+    ownerWindow,
+    activePersistence,
+    settings: {
+      persistOnReload: settings.persistOnReload,
+      persistWorkspace: persistSession || settings.persistOnReload,
+      applyPersistedSettings,
+      persistSettings,
+    },
+    workspace,
+    closeScreenshotRef,
+    clearWorkspaceTransientRef,
+    setSelectedTextIds,
+    applyingExternalPersistenceRef,
+    workspacePersistTimeoutRef,
+    storedState,
+    appliedPageKeyRef,
+    pageWorkspacesRef,
+  });
+  const {
+    saveWorkspace,
+    persistState,
+    applyPersistenceSnapshot,
+    applyPageArtifacts,
+    clearWorkspace,
+    clearPageArtifacts,
+    readPageArtifacts,
+    setEnabledPersisted,
+    setMinimizedPersisted,
+    setToolModePersisted,
+    setRulersVisiblePersisted,
+    setGuideOrientationPersisted,
+    setMeasurementsPersisted,
+    setActiveMeasurementPersisted,
+    setHeldDistancesPersisted,
+    setGuidesPersisted,
+    setSelectedGuideIdsPersisted,
+    setArrowsPersisted,
+    setSelectedArrowIdsPersisted,
+    setTextAnnotationsPersisted,
+    setPenStrokesPersisted,
+    setSelectedPenStrokeIdsPersisted,
+    setSelectedTextIdsPersisted,
+    setCommentsPersisted,
+    setLayoutGuidesPersisted,
+  } = workspaceLifecycle;
+  persistCommentsRef.current = setCommentsPersisted;
+  usePageWorkspaceSwitch({
+    pageKey,
+    appliedPageKeyRef,
+    pageWorkspacesRef,
+    activePersistence,
+    persistWorkspace: persistSession || settings.persistOnReload,
+    readPageArtifacts,
+    applyPageArtifacts,
+    clearPageArtifacts,
+    saveWorkspace,
+  });
+  usePersistenceLifecycle({
+    ownerWindow,
+    activePersistence,
+    persistSettings,
+    persistState,
+    persistWorkspace: persistSession || settings.persistOnReload,
+    saveWorkspace,
+    applyPersistenceSnapshot,
+    storedState,
+    persistenceErrorHandlerRef,
+    applyingExternalPersistenceRef,
+    workspacePersistTimeoutRef,
+  });
+  const { clearGuideDragHold, scheduleGuideDragHold } =
+    useGuideDragHold(ownerWindow);
+  const [guidePreview, setGuidePreview] = useState<{
+    orientation: "vertical" | "horizontal";
+    position: number;
+  } | null>(null);
+  const scrollOffset = useScrollOffset(ownerWindow);
+  enabledRef.current = enabled;
+  minimizedRef.current = minimized;
+  xrayVisibleRef.current = xrayVisible;
+  toolModeRef.current = toolMode;
+  rulersVisibleRef.current = rulersVisible;
+  guideOrientationRef.current = guideOrientation;
+  measurementsRef.current = measurements;
+  activeMeasurementRef.current = activeMeasurement;
+  heldDistancesRef.current = heldDistances;
+  useEffect(() => {
+    if ((toolMode === "none" || !enabled) && heldDistances.length > 0) {
+      setHeldDistancesPersisted([]);
+    }
+  }, [enabled, heldDistances.length, setHeldDistancesPersisted, toolMode]);
+  guidesRef.current = guides;
+  layoutGuidesRef.current = layoutGuides;
+  selectedGuideIdsRef.current = selectedGuideIds;
+  arrowsRef.current = arrows;
+  selectedArrowIdsRef.current = selectedArrowIds;
+  penStrokesRef.current = penStrokes;
+  selectedPenStrokeIdsRef.current = selectedPenStrokeIds;
+  textAnnotationsRef.current = textAnnotations;
+  selectedTextIdsRef.current = selectedTextIds;
+  const savingReviewRef = useRef(false);
+  const [reviewSaveStatus, setReviewSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  useEffect(() => {
+    setReviewSaveStatus("idle");
+  }, [arrows, comments, guides, measurements, penStrokes, textAnnotations]);
+  // Closing or leaving the tab while a review is saved loses it: the browser asks first.
+  useEffect(() => {
+    if (reviewSaveStatus !== "saving") return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    ownerWindow.addEventListener("beforeunload", warn);
+    return () => ownerWindow.removeEventListener("beforeunload", warn);
+  }, [ownerWindow, reviewSaveStatus]);
+  const saveReview = useCallback(async () => {
+    // Nothing below is built into a build that does not save reviews.
+    if (globalThis.__MESURER_NO_REVIEW__) return;
+    if (savingReviewRef.current) return;
+    savingReviewRef.current = true;
+    setReviewSaveStatus("saving");
+    // The review's tab is opened now, while the press allows it, and says what it is waiting
+    // for. This page goes to the background behind it, where the capture carries on.
+    const reviewWindow = ownerWindow.open("", "_blank");
+    if (reviewWindow) {
+      reviewWindow.opener = null;
+      (showReviewLoading ?? showDefaultReviewLoading)(reviewWindow);
+    }
+    const now = Date.now();
+    try {
+      const pageId = ownerWindow.location.href;
+      const versionId = `local-version-${now}`;
+      const commentPins = overlayRef.current?.querySelectorAll<HTMLElement>("[data-mesurer-comment-pin]");
+      // The comments that are on the page as it is saved, and no others: not the resolved ones
+      // the list is not showing, nor those left in a responsive preview. They are the ones with
+      // a pin on the page, in the same order, which is how each pin is matched to its comment.
+      const shownComments = comments.filter((comment) =>
+        !comment.target.preview &&
+        (comment.id === selectedCommentId || commentFilter === "all" || comment.status === commentFilter),
+      );
+      const reviewComments = collectReviewComments(shownComments, commentRuntimeSnapshot.rects, commentPins, ownerWindow);
+      let reviewTextAnnotations = collectReviewTextAnnotations(textAnnotationsRef.current, overlayRef.current ?? undefined);
+      const activeTextDraft = textDraftRef.current;
+      const activeText = (textDraftInputRef.current ?? overlayRef.current?.querySelector<HTMLElement>("[data-mesurer-text-input]"))?.textContent?.trim();
+      if (activeTextDraft && activeText) {
+        const existing = activeTextDraft.id
+          ? reviewTextAnnotations.find((annotation) => annotation.id === activeTextDraft.id)
+          : undefined;
+        if (existing) {
+          const index = reviewTextAnnotations.indexOf(existing);
+          reviewTextAnnotations[index] = { ...existing, text: activeText };
+        }
+        else reviewTextAnnotations.push({ id: `local-text-${now}`, x: activeTextDraft.x, y: activeTextDraft.y, text: activeText });
+      }
+      const state = createReviewStateFromWorkspace({
+        project: {
+          id: "local-project",
+          name: ownerDocument.title || ownerWindow.location.hostname || "Local project",
+        },
+        page: {
+          id: pageId,
+          projectId: "local-project",
+          url: ownerWindow.location.href,
+          ...(ownerDocument.title ? { title: ownerDocument.title } : {}),
+          versionIds: [],
+        },
+        version: {
+          id: versionId,
+          pageId,
+          number: 1,
+          createdAt: now,
+          snapshot: {
+            url: ownerWindow.location.href,
+            ...(ownerDocument.title ? { title: ownerDocument.title } : {}),
+            capturedAt: now,
+            viewport: {
+              width: ownerWindow.innerWidth,
+              height: ownerWindow.innerHeight,
+              devicePixelRatio: ownerWindow.devicePixelRatio,
+            },
+            scroll: { x: ownerWindow.scrollX, y: ownerWindow.scrollY },
+          },
+          domContext: { fingerprints: {} },
+        },
+        reviewId: `local-review-${now}`,
+        workspace: {
+          enabled,
+          minimized,
+          xrayVisible,
+          toolMode,
+          rulersVisible,
+          guideOrientation,
+          guides,
+          selectedGuideIds,
+          arrows,
+          selectedArrowIds,
+          selectedPenStrokeIds,
+          selectedTextIds,
+          penStrokes,
+          textAnnotations: reviewTextAnnotations,
+          measurements,
+          activeMeasurement,
+          heldDistances,
+          comments: reviewComments,
+          // Layout guides are a working aid, not part of what is said about the page: a saved
+          // review is kept without them.
+          layoutGuides: [],
+          textStyle: settings.textStyle,
+        },
+        now,
+      });
+      const startedAt = ownerWindow.performance.now();
+      const capture = await captureReviewSnapshot({
+        ownerDocument,
+        ownerWindow,
+        overlay: overlayRef.current,
+        captureVisibleTab,
+        captureDom,
+      });
+      const capturedAt = ownerWindow.performance.now();
+      const ephemeral = await (createReviewViewer ?? createDefaultReviewViewer)(state, capture, ownerWindow);
+      // Where a save's time goes, and what it weighs. Shown at the console's verbose level.
+      console.debug(
+        `[Mesurer] Review: capture ${Math.round(capturedAt - startedAt)} ms, viewer ${Math.round(ownerWindow.performance.now() - capturedAt)} ms, ` +
+          `picture ${capture.width} × ${capture.height} ${capture.mimeType} ${Math.round(capture.blob.size / 1024)} KB, page ${Math.round(ephemeral.html.length / 1024)} KB`,
+      );
+      const reviewId = ownerWindow.crypto.randomUUID?.() ?? (() => {
+        const bytes = new Uint8Array(16);
+        ownerWindow.crypto.getRandomValues(bytes);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        return [...bytes].map((byte, index) => `${byte.toString(16).padStart(2, "0")}${[3, 5, 7, 9].includes(index) ? "-" : ""}`).join("");
+      })();
+      // Demo-only UUID route: the viewer is stored locally and is not cross-browser shareable.
+      let reviewUrl = new URL(`/${reviewId}`, ownerWindow.location.href).href;
+      if (publishReview) reviewUrl = await publishReview({ id: reviewId, html: ephemeral.html, state: ephemeral.state, screenshot: capture.blob });
+      else await saveReviewViewer(ownerWindow, reviewId, ephemeral.html);
+      reviewWindow?.location.replace(reviewUrl);
+      URL.revokeObjectURL(ephemeral.url);
+      setReviewSaveStatus("saved");
+    } catch (error) {
+      reviewWindow?.close();
+      console.error("[Mesurer] Could not save review", error);
+      setReviewSaveStatus("error");
+    } finally {
+      savingReviewRef.current = false;
+    }
+  }, [
+    activeMeasurement,
+    arrows,
+    comments,
+    enabled,
+    guideOrientation,
+    guides,
+    heldDistances,
+    commentFilter,
+    selectedCommentId,
+    measurements,
+    minimized,
+    ownerDocument,
+    ownerWindow,
+    overlayRef,
+    penStrokes,
+    rulersVisible,
+    selectedArrowIds,
+    selectedGuideIds,
+    selectedPenStrokeIds,
+    selectedTextIds,
+    textAnnotations,
+    settings.textStyle,
+    toolMode,
+    xrayVisible,
+    captureVisibleTab,
+    captureDom,
+    createReviewViewer,
+    publishReview,
+    showReviewLoading,
+    commentRuntimeSnapshot.rects,
+  ]);
+  const {
+    recordSnapshot,
+    createActionCommit,
+    setToolModeWithHistory,
+    setGuideOrientationWithHistory,
+    setEnabledWithHistory,
+    undo,
+    redo,
+  } = useMesurerHistory({
+    toggles: {
+      enabled,
+      setEnabled: setEnabledPersisted,
+      toolMode,
+      setToolMode: setToolModePersisted,
+      guideOrientation,
+      setGuideOrientation: setGuideOrientationPersisted,
+    },
+    measurements: {
+      measurements,
+      setMeasurements: setMeasurementsPersisted,
+      activeMeasurement,
+      setActiveMeasurement: setActiveMeasurementPersisted,
+      selectedMeasurements,
+      setSelectedMeasurements,
+      selectedMeasurement,
+      setSelectedMeasurement,
+      heldDistances,
+      setHeldDistances: setHeldDistancesPersisted,
+    },
+    guides: {
+      guides,
+      setGuides: setGuidesPersisted,
+      selectedGuideIds,
+      setSelectedGuideIds: setSelectedGuideIdsPersisted,
+      draggingGuideId,
+      setDraggingGuideId,
+    },
+    arrows: {
+      arrows,
+      setArrows: setArrowsPersisted,
+      selectedArrowIds,
+      setSelectedArrowIds: setSelectedArrowIdsPersisted,
+    },
+    text: {
+      textAnnotations,
+      setTextAnnotations: setTextAnnotationsPersisted,
+    },
+    pen: {
+      penStrokes,
+      setPenStrokes: setPenStrokesPersisted,
+      selectedPenStrokeIds,
+      setSelectedPenStrokeIds,
+    },
+    comments: {
+      comments,
+      setComments: setCommentsPersisted,
+    },
+    layoutGuides: {
+      layoutGuides,
+      setLayoutGuides: setLayoutGuidesPersisted,
+    },
+    transient: {
+      setStart,
+      setEnd,
+      setIsDragging,
+      setGuidePreview,
+      setHoverRect,
+      setHoverElement,
+      setSelectedElement,
+      clearSelectionRect,
+    },
+  });
+  const setLayoutGuidesWithHistory = useCallback(
+    (value: SetStateAction<LayoutGuide[]>) => {
+      recordSnapshot();
+      setLayoutGuidesPersisted(value);
+    },
+    [recordSnapshot, setLayoutGuidesPersisted],
+  );
+  const toggleResolvedComment = useCallback((id: string) => {
+    recordSnapshot();
+    toggleCommentResolved(id);
+  }, [recordSnapshot, toggleCommentResolved]);
+  const annotationSelection = useAnnotationSelection({
+    enabled,
+    toolMode,
+    ownerDocument,
+    overlayRef,
+    toolbarRef,
+    scrollOffset,
+    guides,
+    arrows,
+    penStrokes,
+    textAnnotations,
+    selectedGuideIds,
+    selectedArrowIds,
+    selectedPenStrokeIds,
+    selectedTextIds,
+    clearSelectionRect,
+    setStart,
+    setEnd,
+    setIsDragging,
+    setSelectedGuideIds: setSelectedGuideIdsPersisted,
+    setSelectedArrowIds: setSelectedArrowIdsPersisted,
+    setSelectedTextIds: setSelectedTextIdsPersisted,
+    setSelectedPenStrokeIds: setSelectedPenStrokeIdsPersisted,
+    setSelectedMeasurements,
+    setSelectedMeasurement,
+    setSelectedElement,
+    setGuides: setGuidesPersisted,
+    setArrows: setArrowsPersisted,
+    setPenStrokes: setPenStrokesPersisted,
+    setTextAnnotations: setTextAnnotationsPersisted,
+    recordSnapshot,
+    setToolMode: setToolModeWithHistory,
+  });
+  const {
+    clearSelection,
+    removeSelected,
+    selectAllAnnotations,
+    groupBounds,
+    groupRotateFrame,
+    selectionDragOffset,
+    moveSelectedAnnotations,
+    beginMoveSession,
+    moveFromSession,
+    endMoveSession,
+    cancelMoveSession,
+    startGroupRotate,
+    updateGroupRotate,
+    endGroupRotate,
+    startGroupResize,
+    resizeSelectedAnnotations,
+    endGroupResize,
+  } = annotationSelection;
+  const colorPicker = useColorPicker({
+    ownerWindow,
+    clickFormat: settings.colorPickerClickFormat,
+    setEnabled: (value) => setEnabledWithHistory(value),
+    setToolModeNone: () => setToolModeWithHistory("none"),
+  });
+  const closeColorPicker = useCallback(() => colorPicker.setActive(false), [colorPicker.setActive]);
+  const screenshot = useScreenshot({
+    ownerDocument,
+    ownerWindow,
+    overlayRef,
+    captureVisibleTab,
+    settings: settings.screenshotSettings,
+    setEnabled: (value) => setEnabledWithHistory(value),
+    setToolbarActive: (active) => {
+      if (active) setMinimizedPersisted(false);
+      setToolbarActive(active);
+    },
+    onPrepare: () => {
+      colorPicker.setActive(false);
+      setSettingsOpen(false);
+    },
+  });
+  const screenRecording = useScreenRecording({
+    ownerDocument,
+    ownerWindow,
+    extensionRecording,
+    extensionRecordingPlayer,
+    onPrepare: () => {
+      colorPicker.setActive(false)
+      screenshot.closeUi()
+      setSettingsOpen(false)
+    },
+  })
+  closeScreenshotRef.current = screenshot.closeUi;
+  const openColorPicker = useCallback(() => {
+    screenshot.closeUi();
+    void colorPicker.open();
+  }, [colorPicker.open, screenshot.closeUi]);
+  const [settingsFocus, setSettingsFocus] = useState<
+    SettingsFocusSection | undefined
+  >();
+  const toggleSettings = useCallback(() => {
+    if (settingsOpen) {
+      screenshot.closeUi();
+      setOpenMenu(null);
+      setSettingsOpen(false);
+      return;
+    }
+    setOpenMenu({ type: "settings" });
+    setSettingsFocus(
+      settingsFocusSection(toolMode, {
+        colorPicker: colorPicker.active,
+        screenshot: screenshot.active,
+        rulersVisible,
+      }),
+    );
+    colorPicker.setActive(false);
+    screenshot.closeUi();
+    setSettingsOpen(true);
+  }, [
+    colorPicker.active,
+    rulersVisible,
+    screenshot.active,
+    screenshot.closeUi,
+    settingsOpen,
+    toolMode,
+  ]);
+
+  // The previews are frames of this page, so the tools work in them as they do on the page.
+  const [responsiveOpen, setResponsiveOpen] = useState(false);
+  // The size of the preview a comment being looked at was left in, for the previews to show.
+  const [wantedPreview, setWantedPreview] = useState<{ width: number; height: number } | null>(null);
+  // The comment to bring into view once the element it is on is found.
+  const revealCommentRef = useRef<string | null>(null);
+  // A press on the page in a preview is in that page's frame, where the toolbar's menus do not
+  // hear it: they are closed from here, as a press anywhere else outside them closes them.
+  const closeToolbarMenus = useCallback(() => setOpenMenu(null), [setOpenMenu]);
+  const toggleResponsive = useCallback(() => {
+    // What is selected belongs to where it was selected: the page, or a preview that is closing.
+    clearSelection();
+    setSelectedMeasurement(null);
+    setSelectedMeasurements([]);
+    setSelectedCommentId(null);
+    cancelCommentDraft();
+    setWantedPreview(null);
+    if (responsiveOpen) {
+      setResponsiveOpen(false);
+      return;
+    }
+    setEnabledWithHistory(true);
+    setSettingsOpen(false);
+    setOpenMenu(null);
+    colorPicker.setActive(false);
+    screenshot.closeUi();
+    // Inspecting and commenting are the tools that work in the previews, with X-ray and the
+    // layout guides.
+    if (toolMode !== "select" && toolMode !== "comments") setToolModePersisted("none");
+    setRulersVisible(false);
+    setResponsiveOpen(true);
+  }, [
+    cancelCommentDraft,
+    clearSelection,
+    colorPicker,
+    responsiveOpen,
+    screenshot,
+    setEnabledWithHistory,
+    setOpenMenu,
+    setRulersVisible,
+    setSelectedMeasurement,
+    setSelectedMeasurements,
+    setToolModePersisted,
+    toolMode,
+  ]);
+  // A tool that draws on the page itself (rulers, annotations) leaves the previews for the
+  // page. Putting Mesurer away takes them along.
+  useEffect(() => {
+    if (!responsiveOpen) return;
+    // Guides and comments work in the previews; rulers and the page's other tools belong to the page.
+    if (minimized || rulersVisible || (toolMode !== "none" && toolMode !== "select" && toolMode !== "guides" && toolMode !== "comments")) setResponsiveOpen(false);
+  }, [minimized, responsiveOpen, rulersVisible, toolMode]);
+
+  const [layoutGuidesVisible, setLayoutGuidesVisible] = useState(false);
+  const toggleLayoutGuides = useCallback(() => {
+    if (layoutGuidesVisible) {
+      setLayoutGuidesVisible(false);
+      if (openMenu?.type === "layout-guides") setOpenMenu(null);
+      return;
+    }
+    setEnabledWithHistory(true);
+    setSettingsOpen(false);
+    colorPicker.setActive(false);
+    screenshot.closeUi();
+    if (layoutGuidesRef.current.length === 0) {
+      setLayoutGuidesWithHistory([createLayoutGuide()]);
+    }
+    setLayoutGuidesVisible(true);
+    setOpenMenu({ type: "layout-guides" });
+  }, [
+    colorPicker,
+    layoutGuidesVisible,
+    openMenu,
+    screenshot,
+    setEnabledWithHistory,
+    setLayoutGuidesWithHistory,
+    setLayoutGuidesVisible,
+    setOpenMenu,
+    setSettingsOpen,
+  ]);
+  const closeLayoutGuidesMenu = useCallback(() => {
+    if (openMenu?.type === "layout-guides") setOpenMenu(null);
+  }, [openMenu, setOpenMenu]);
+
+  const setArrowColor = useCallback(
+    (value: SetStateAction<string>) => {
+      const color = typeof value === "function"
+        ? value(settings.arrowColor)
+        : value;
+      settings.setArrowColor(color);
+      setArrowsPersisted((previous) =>
+        previous.map((arrow) => ({ ...arrow, color })),
+      );
+    },
+    [setArrowsPersisted, settings.setArrowColor, settings.arrowColor],
+  );
+  // How many annotations are selected, and whether they make a group: several of them, or
+  // one together with a guide.
+  const selectedShapeCount =
+    selectedArrowIds.length + selectedTextIds.length + selectedPenStrokeIds.length;
+  const selectionCount = selectedGuideIds.length + selectedShapeCount;
+  const selectionIsGroup =
+    selectedShapeCount > 1 || (selectedShapeCount > 0 && selectedGuideIds.length > 0);
+  useResizeSync({
+    document: ownerDocument,
+    window: ownerWindow,
+    setMeasurements: setMeasurementsPersisted,
+    setActiveMeasurement: setActiveMeasurementPersisted,
+    setHeldDistances: setHeldDistancesPersisted,
+    setSelectedMeasurement,
+    setGuides: setGuidesPersisted,
+    selectedElementRef,
+  });
+  useLiveElementTracking({
+    document: ownerDocument,
+    window: ownerWindow,
+    enabled,
+    active:
+      measurements.length > 0 ||
+      selectedMeasurements.length > 0 ||
+      heldDistances.length > 0 ||
+      hoverRect !== null,
+    selectionEnabled: toolMode === "select",
+    guides,
+    selectedMeasurements,
+    selectedElementRef,
+    hoverElementRef,
+    setSelectedMeasurement,
+    setSelectedMeasurements,
+    setHoverRect,
+    setMeasurements: setMeasurementsPersisted,
+    setActiveMeasurement: setActiveMeasurementPersisted,
+    setHeldDistances: setHeldDistancesPersisted,
+  });
+  useXray(ownerDocument, xrayVisible, responsiveOpen);
+  useGuideWindowEvents({
+    ownerDocument,
+    ownerWindow,
+    enabled,
+    settingsOpen,
+    toolMode,
+    toolbarActive,
+    minimized,
+    snapGuidesEnabled,
+    guides,
+    toolbarRef,
+    overlayRef,
+    createActionCommit,
+    setGuides: setGuidesPersisted,
+    setSelectedGuideIds: setSelectedGuideIdsPersisted,
+    setToolbarActive,
+    selectedGuideIds,
+    selectionCount,
+    moveSelectedAnnotations,
+  });
+  useSelectionAnimationCleanup({
+    ownerWindow,
+    selectionOriginRect,
+    selectedMeasurement,
+    selectedMeasurements,
+    setSelectionOriginRect,
+    setSelectedMeasurement,
+    setSelectedMeasurements,
+  });
+  const displayedMeasurements = holdEnabled
+    ? measurements
+    : multiMeasureEnabled && measurements.length > 0
+      ? measurements
+      : activeMeasurement
+        ? [activeMeasurement]
+        : [];
+  const {
+    activeRect,
+    activeWidth,
+    activeHeight,
+    displayedSelectedMeasurements,
+    hoverGuide,
+    optionPairOverlay,
+    optionContainerLines,
+    guideDistanceOverlay,
+    outlineColor,
+    fillColor,
+    guideColorActive,
+    guideColorHover,
+    guideColorDefault,
+    guideColorPreview,
+    guidePreviewEmphasized,
+    hoverRectToShow,
+    selectedEdgeVisibility,
+    hoverEdgeVisibility,
+  } = useMesurerDerived({
+    document: ownerDocument,
+    window: ownerWindow,
+    start,
+    end,
+    selectedMeasurements,
+    selectedMeasurement,
+    selectionOriginRect,
+    guides,
+    selectedGuideIds,
+    hoverPointer,
+    hoverRect,
+    // While the previews are open, the page behind is not measured: only what is inside a preview.
+    hoverElement: responsiveOpen && hoverElement?.ownerDocument === ownerDocument ? null : hoverElement,
+    selectedElement,
+    altPressed,
+    guidesEnabled,
+    guidePreview,
+    displayedMeasurements,
+    hoverHighlightEnabled: settings.hoverHighlightEnabled,
+    guideHighlightEnabled: settings.guideHighlightEnabled,
+    highlightColor: settings.highlightColor,
+    guideColor: settings.guideColor,
+  });
+  const { copySelector, isCopied: isSelectorCopied } = useSelectorCopy(ownerWindow);
+  const selectedTypography = useSelectedTypography(selectedElement, ownerDocument, ownerWindow);
+  const motionElement = selectedMeasurement?.elementRef ?? selectedElement;
+  const { ready: selectedMotionPlayable, observedProperties: selectedObservedProperties, observedTargets: selectedObservedTargets } = usePlayableMotion(motionElement, motionElement?.ownerDocument.defaultView);
+  const {
+    handlePointerDown,
+    handlePointerMove,
+    handlePointerUp,
+    handlePointerLeave,
+  } = useMesurerPointer({
+    document: ownerDocument,
+    window: ownerWindow,
+    toolbarRef,
+    overlayRef,
+    selectionRectRef,
+    createActionCommit,
+    clearGuideDragHold,
+    scheduleGuideDragHold,
+    enabled,
+    minimized,
+    settingsOpen,
+    toolMode,
+    guidesEnabled,
+    snapEnabled,
+    snapGuidesEnabled,
+    selectNewGuideEnabled,
+    altPressed,
+    guideOrientation,
+    hoverHighlightEnabled,
+    start,
+    end,
+    isDragging,
+    selectedMeasurements,
+    selectedMeasurement,
+    selectedGuideIds,
+    guides,
+    draggingGuideId,
+    optionPairOverlay,
+    setAltPressed,
+    setGuidePreview,
+    setSelectedGuideIds: setSelectedGuideIdsPersisted,
+    setGuides: setGuidesPersisted,
+    setStart,
+    setEnd,
+    setIsDragging,
+    setHeldDistances: setHeldDistancesPersisted,
+    setDraggingGuideId,
+    setActiveMeasurement: setActiveMeasurementPersisted,
+    setMeasurements: setMeasurementsPersisted,
+    setSelectedMeasurements,
+    setSelectedMeasurement,
+    setSelectionOriginRect,
+    setSelectedElement,
+    onSelectElement: copySelector,
+    setHoverRect,
+    setHoverElement,
+    setHoverPointer,
+    clearSelectionRect,
+    selectionMode: toolMode === "selection",
+    scrollOffset,
+    textAnnotations,
+    arrows,
+    penStrokes,
+    setSelectedTextIds: setSelectedTextIdsPersisted,
+    setSelectedArrowIds: setSelectedArrowIdsPersisted,
+    setSelectedPenStrokeIds: setSelectedPenStrokeIdsPersisted,
+  });
+  const arrowsPointer = useArrowsPointer({
+    enabled,
+    settingsOpen,
+    snapArrowsEnabled,
+    arrowClickToPlace,
+    color: settings.arrowColor,
+    width: Math.max(settings.guideStyle.width, 1),
+    overlayRef,
+    ownerDocument,
+    guides,
+    createActionCommit,
+    setToolMode: setToolModeWithHistory,
+    setArrows: setArrowsPersisted,
+    onBeginMove: (id: string) => beginMoveSession({ arrowId: id }),
+    onDragMove: moveFromSession,
+    onMoveEnd: endMoveSession,
+    setSelectedArrowIds: setSelectedArrowIdsPersisted,
+    clearOtherSelections: () => {
+      setSelectedGuideIdsPersisted([]);
+      setSelectedTextIds([]);
+      setSelectedPenStrokeIds([]);
+      setSelectedMeasurements([]);
+      setSelectedMeasurement(null);
+      setSelectedElement(null);
+      clearSelectionRect();
+      ownerDocument.defaultView?.getSelection()?.removeAllRanges();
+    },
+    arrows,
+    selectedArrowIds,
+    arrowStart,
+    arrowMiddle,
+    arrowPreviewEnd,
+    setArrowStart,
+    setArrowMiddle,
+    setArrowPreviewEnd,
+    scrollOffset,
+  });
+  cancelArrowInteractionRef.current = arrowsPointer.cancelInteraction;
+  hasArrowInteractionRef.current = arrowsPointer.hasActiveInteraction;
+  // Every pen as it is set, and the one in hand.
+  const pens = PEN_KINDS.map((kind) => penInHand(kind, settings.penSettings, settings.arrowColor));
+  const penInHandNow = pens.find((pen) => pen.kind === settings.penKind) ?? pens[0];
+  // How far the eraser reaches, when it is what is in hand.
+  const eraserWidth = settings.penSettings.eraser?.width ?? ERASER_WIDTH;
+  const eraserRadius = settings.penKind === "eraser" ? eraserWidth / 2 : null;
+  const penPointer = usePenPointer({
+    enabled,
+    settingsOpen,
+    toolMode,
+    pen: penInHandNow,
+    eraser: eraserRadius,
+    penStrokes,
+    scrollOffset,
+    createActionCommit,
+    setPenStrokes: setPenStrokesPersisted,
+    setPenPreview,
+  });
+  cancelPenInteractionRef.current = penPointer.cancelInteraction;
+  hasPenInteractionRef.current = penPointer.hasActiveInteraction;
+  const annotationCallbacks = useAnnotationCallbacks({
+    textAnnotations,
+    textStyle: settings.textStyle,
+    selectedTextIds,
+    selectedPenStrokeIds,
+    scrollOffset,
+    textDraftRef,
+    textDraftInputRef,
+    committedTextEditorsRef,
+    suppressTextCreateRef,
+    setSelectedGuideIds: setSelectedGuideIdsPersisted,
+    setSelectedArrowIds: setSelectedArrowIdsPersisted,
+    setSelectedTextIds: setSelectedTextIdsPersisted,
+    setSelectedPenStrokeIds: setSelectedPenStrokeIdsPersisted,
+    setSelectedMeasurements,
+    setSelectedMeasurement,
+    setSelectedElement,
+    clearSelectionRect,
+    setTextDraft,
+    setPenStrokes: setPenStrokesPersisted,
+    setTextAnnotations: setTextAnnotationsPersisted,
+    moveSelectedAnnotations,
+    setToolMode: setToolModePersisted,
+    recordSnapshot,
+  });
+  const {
+    selectPenStroke,
+    changePenStroke,
+    finishTextDraft,
+    activateTextEditor,
+    selectTextAnnotation,
+    transformTextAnnotation,
+    editTextAnnotation,
+    handleTextPointerDown,
+    handleTextKeyDown,
+  } = annotationCallbacks;
+  const activateToolbar = useCallback(() => {
+    setToolbarActive(true);
+  }, [setToolbarActive]);
+  const pinableOverlay = guidesEnabled
+    ? (guideDistanceOverlay ?? optionPairOverlay)
+    : (optionPairOverlay ?? guideDistanceOverlay);
+  const pinDistance = useCallback(() => {
+    if (!pinableOverlay) return false;
+    recordSnapshot();
+    setHeldDistancesPersisted((prev) => [
+      ...prev,
+      attachPinnedGuideTarget({
+        distance: pinableOverlay,
+        document: ownerDocument,
+        overlayNode: overlayRef.current,
+        pointer: hoverPointer,
+      }),
+    ]);
+    return true;
+  }, [
+    hoverPointer,
+    ownerDocument,
+    pinableOverlay,
+    recordSnapshot,
+    setHeldDistancesPersisted,
+  ]);
+  const restoreToolbar = useCallback(() => {
+    setMinimizedPersisted(false);
+    setToolbarActive(true);
+  }, [setMinimizedPersisted, setToolbarActive]);
+  const minimizeMesurer = useCallback(() => {
+    setSettingsOpen(false);
+    setOpenMenu(null);
+    setSelectedCommentId(null);
+    cancelCommentDraft();
+    commentRuntime.setHoverElement(null);
+    colorPicker.setActive(false);
+    screenshot.closeUi();
+    if (screenRecording.recording) screenRecording.stop();
+    else screenRecording.cancelSelection();
+    clearSelection();
+    setHoverRect(null);
+    setHoverPointer(null);
+    setHoverElement(null);
+    setMinimizedPersisted(true);
+  }, [
+    cancelCommentDraft,
+    clearSelection,
+    colorPicker,
+    commentRuntime,
+    screenshot,
+    screenRecording,
+    setHoverElement,
+    setHoverPointer,
+    setHoverRect,
+    setMinimizedPersisted,
+    setOpenMenu,
+    setSelectedCommentId,
+    setSettingsOpen,
+  ]);
+  const closeScreenshotUi = screenshot.closeUi;
+  useEffect(() => {
+    if (!features.screenshot) closeScreenshotUi();
+    if (!features.rulers) setRulersVisible(false);
+    if (!features.settings) setSettingsOpen(false);
+  }, [closeScreenshotUi, features.rulers, features.screenshot, features.settings, setRulersVisible, setSettingsOpen]);
+  const { clearTransientState } = useInteractionLifecycle({
+    enabled,
+    toolMode,
+    xrayVisible,
+    rulersVisible,
+    toolbarActive,
+    minimized,
+    shortcutsEnabled: settings.shortcutsEnabled,
+    settingsOpen,
+    layoutGuidesOpen: openMenu?.type === "layout-guides",
+    responsiveOpen,
+    ownerDocument,
+    ownerWindow,
+    toolbarRef,
+    overlayRef,
+    scrollOffset,
+    guides,
+    arrows,
+    penStrokes,
+    textAnnotations,
+    selectedGuideIds,
+    selectedArrowIds,
+    selectedPenStrokeIds,
+    selectedTextIds,
+    selectedMeasurements,
+    selectedMeasurement,
+    selectedElement,
+    commentDraftActive: commentDraft !== null,
+    cancelCommentDraft,
+    hasComments: () => comments.length > 0,
+    start,
+    arrowStart,
+    draggingGuideId,
+    isDragging,
+    textDraft,
+    textDraftRef,
+    setTextDraft,
+    setStart,
+    setEnd,
+    setIsDragging,
+    setHoverRect,
+    setHoverPointer,
+    setHoverElement,
+    setSelectedElement,
+    setArrowStart,
+    setArrowMiddle,
+    setArrowPreviewEnd,
+    setXrayVisible,
+    setAltPressed,
+    pinDistance,
+    setToolMode,
+    clearSelectionRect,
+    clearGuideDragHold,
+    cancelArrowInteraction: arrowsPointer.cancelInteraction,
+    cancelPenInteraction: penPointer.cancelInteraction,
+    cancelMoveSession,
+    hasArrowInteraction: arrowsPointer.hasActiveInteraction,
+    hasPenInteraction: penPointer.hasActiveInteraction,
+    clearSelection,
+    recordSnapshot,
+    setSelectedGuideIds: setSelectedGuideIdsPersisted,
+    setSelectedArrowIds: setSelectedArrowIdsPersisted,
+    setSelectedTextIds: setSelectedTextIdsPersisted,
+    setSelectedPenStrokeIds: setSelectedPenStrokeIdsPersisted,
+    setSelectedMeasurements,
+    setSelectedMeasurement,
+    screenshot,
+    screenRecording,
+    colorPicker,
+    undo,
+    redo,
+    // Over the previews, Delete is for what is selected in them: the page's own annotations are
+    // put away, and are not removed from behind them.
+    removeSelected: responsiveOpen ? removePreviewSelection : removeSelected,
+    selectAllAnnotations,
+    setEnabled: setEnabledPersisted,
+    setRulersVisible,
+    setGuideOrientation,
+    onInteract: activateToolbar,
+    onMinimize: minimizeMesurer,
+    onToggleSettings: toggleSettings,
+    onToggleLayoutGuides: toggleLayoutGuides,
+    onCloseLayoutGuidesMenu: closeLayoutGuidesMenu,
+    onToggleResponsive: toggleResponsive,
+    onCopyComments: copyAllComments,
+    onResolveAllComments: resolveAllCommentsWithFeedback,
+    dismissInspectorPins: () => {
+      if (heldDistancesRef.current.length === 0) return false
+      recordSnapshot()
+      setHeldDistancesPersisted([])
+      return true
+    },
+    selectedCommentId,
+    closeComment: () => setSelectedCommentId(null),
+    features,
+  });
+  const clearAllTransientState = useCallback(() => {
+    clearTransientState();
+    cancelCommentDraft();
+    commentRuntime.setHoverElement(null);
+  }, [cancelCommentDraft, clearTransientState, commentRuntime]);
+  clearWorkspaceTransientRef.current = clearAllTransientState;
+  const removeHeldDistance = useCallback(
+    (id: string) => {
+      recordSnapshot();
+      setHeldDistancesPersisted((prev) =>
+        prev.filter((distance) => distance.id !== id),
+      );
+    },
+    [recordSnapshot, setHeldDistancesPersisted],
+  );
+  const removeGuides = useCallback(
+    (ids: string[]) => {
+      const guideIds = new Set(ids)
+      if (!guides.some((guide) => guideIds.has(guide.id))) return;
+      recordSnapshot();
+      setGuides((prev) => prev.filter((guide) => !guideIds.has(guide.id)));
+      setSelectedGuideIdsPersisted((prev) => prev.filter((guideId) => !guideIds.has(guideId)));
+      setHeldDistancesPersisted((prev) =>
+        prev.filter(
+          (distance) =>
+            !distance.guideIds?.some(
+              (guideId) => guideId !== null && guideIds.has(guideId),
+            ),
+        ),
+      );
+    },
+    [
+      guides,
+      recordSnapshot,
+      setGuides,
+      setHeldDistancesPersisted,
+      setSelectedGuideIdsPersisted,
+    ],
+  );
+  const {
+    startGuideFromRuler,
+    moveGuideFromRuler,
+    finishGuideFromRuler,
+    cancelGuideFromRuler,
+    handleGuidePointerDown,
+    handleGuidePointerUp,
+    overlayGuides,
+  } = useRulerGuides({
+    ownerDocument,
+    ownerWindow,
+    overlayRef,
+    enabled,
+    snapGuidesEnabled,
+    selectNewGuideEnabled,
+    settingsOpen,
+    guides,
+    createActionCommit,
+    setGuides: setGuidesPersisted,
+    setSelectedGuideIds: setSelectedGuideIdsPersisted,
+    setDraggingGuideId,
+    selectedGuideIds,
+    selectionCount,
+    scheduleGuideDragHold,
+    clearGuideDragHold,
+  });
+  // A comment picked from the list before what it is on was there (its preview still loading) is
+  // brought into view as soon as it is found.
+  useEffect(() => {
+    const id = revealCommentRef.current
+    if (!id) return
+    if (id !== selectedCommentId) {
+      revealCommentRef.current = null
+      return
+    }
+    const element = commentRuntime.getElement(id)
+    if (!element?.isConnected || !element.ownerDocument.defaultView) return
+    revealCommentRef.current = null
+    scrollElementIntoView(element)
+  }, [commentRuntime, commentRuntimeSnapshot, selectedCommentId])
+  // A comment is shown where it was left: on the page, or over the previews while the one it
+  // was left in is open.
+  const overlayComments = comments.filter((comment) =>
+    responsiveOpen
+      ? Boolean(comment.target.preview) && !commentRuntimeSnapshot.unresolvedIds.has(comment.id)
+      : !comment.target.preview,
+  )
+  const overlayInteractive = enabled && !settingsOpen && !minimized
+  const movingGroupRect = (() => {
+    if (!selectionIsGroup) return null
+    const base = groupRotateFrame?.rect ?? groupBounds
+    if (!base) return null
+    if (selectionDragOffset.x === 0 && selectionDragOffset.y === 0) return base
+    return {
+      ...base,
+      left: base.left + selectionDragOffset.x,
+      top: base.top + selectionDragOffset.y,
+    }
+  })();
+  const pointerHandlers = useOverlayPointerHandlers({
+    toolMode,
+    arrows: arrowsPointer,
+    pen: penPointer,
+    text: { handlePointerDown: handleTextPointerDown },
+    comments: {
+      handlePointerDown: commentPointer.onPointerDown,
+      handlePointerMove: commentPointer.onPointerMove,
+      handlePointerUp: commentPointer.onPointerUp,
+      handlePointerLeave: commentPointer.onPointerLeave,
+      handlePointerCancel: commentPointer.onPointerCancel,
+    },
+    measure: {
+      handlePointerDown,
+      handlePointerMove,
+      handlePointerUp,
+      handlePointerLeave,
+    },
+  });
+  if (
+    (toolMode === "select" ||
+      toolMode === "selection" ||
+      toolMode === "guides" ||
+      toolMode === "arrows" ||
+      toolMode === "pen" ||
+      toolMode === "text" ||
+      toolMode === "comments") &&
+    settings.lastToolMode !== toolMode
+  ) {
+    settings.setLastToolMode(toolMode);
+  }
+  return (
+    <MesurerPortal
+      portalTarget={portalTarget}
+      theme={settings.theme}
+      enabled={enabled}
+      rootRef={overlayRef}
+      toolbarRef={toolbarRef}
+      screenshotOverlayRef={screenshot.overlayRef}
+      rulers={{
+        ownerWindow,
+        visible: enabled && features.rulers && rulersVisible,
+        settings: settings.rulerSettings,
+        interactive: !settingsOpen && !minimized,
+        forceVisible: settingsOpen,
+        onStartGuide: startGuideFromRuler,
+        onMoveGuide: moveGuideFromRuler,
+        onFinishGuide: finishGuideFromRuler,
+        onCancelGuide: cancelGuideFromRuler,
+        guides,
+        selectedGuideIds,
+      }}
+      layoutGuides={layoutGuides}
+      layoutGuidesVisible={layoutGuidesVisible}
+      responsive={responsiveOpen ? { onClose: toggleResponsive, guidesActive: toolMode === "guides", altPressed, guideOrientation, wanted: wantedPreview, onPreviewPress: closeToolbarMenus } : null}
+      overlay={{
+        enabled,
+        pageLayers: !responsiveOpen,
+        interactive: overlayInteractive,
+        minimized,
+        toolMode,
+        guidesEnabled,
+        altPressed,
+        isDragging,
+        marqueeRect:
+          isDragging && start && end ? getRectFromPoints(start, end) : null,
+        groupBounds: movingGroupRect,
+        groupFrameRotation: selectionIsGroup ? (groupRotateFrame?.rotation ?? 0) : 0,
+        selectionCount,
+        onResizeSelection: resizeSelectedAnnotations,
+        onMoveSelection: moveFromSession,
+        onMoveSelectionStart: () => {
+          recordSnapshot()
+          beginMoveSession()
+        },
+        onMoveSelectionEnd: endMoveSession,
+        onStartGroupResize: startGroupResize,
+        onEndGroupResize: endGroupResize,
+        onStartGroupRotate: startGroupRotate,
+        onUpdateGroupRotate: updateGroupRotate,
+        onEndGroupRotate: endGroupRotate,
+        fillColor,
+        outlineColor,
+        layoutDetailsEnabled: settings.layoutDetailsEnabled,
+        pointers: {
+          ...pointerHandlers,
+        },
+        selection: {
+          activeRect,
+          activeWidth,
+          activeHeight,
+          hoverRect: hoverRectToShow,
+          hoverEdges: hoverEdgeVisibility,
+          selected: displayedSelectedMeasurements,
+          selectedEdges: selectedEdgeVisibility,
+          selectorPreview:
+            settings.infoCardMode === "hover" && hoverElement && hoverRect
+              ? {
+                  element: hoverElement,
+                  rect: hoverRect,
+                  copied: isSelectorCopied(hoverElement),
+                }
+              : null,
+          ownerWindow,
+          highlightColor: settings.highlightColor,
+            selectedSelectorCopied: isSelectorCopied(selectedElement),
+             selectedTypography,
+             selectedMeasurementCount: selectedMeasurements.length,
+             hideInfoCard: selectedMotionPlayable && !screenRecording.recording && !screenRecording.video,
+          },
+        distances: {
+          held: heldDistances,
+          optionPair: optionPairOverlay,
+          // The page's own guides are not measured over the previews: each preview measures its own.
+          guideDistance: responsiveOpen ? null : guideDistanceOverlay,
+          containerLines: optionContainerLines,
+          containerElement: selectedMeasurement?.elementRef ?? selectedElement,
+          onRemoveHeld: removeHeldDistance,
+        },
+        guides: {
+          openMenu,
+          setOpenMenu,
+          items: overlayGuides,
+          selectedIds: selectedGuideIds,
+          moveOffset: selectionDragOffset,
+           hover: hoverGuide,
+           draggingId: draggingGuideId,
+           highlightEnabled: settings.guideHighlightEnabled,
+           selectEnabled: selectNewGuideEnabled,
+           style: settings.guideStyle,
+          pointerEvents:
+            overlayInteractive && (toolMode !== "none" || (features.rulers && rulersVisible)),
+          colors: {
+            active: guideColorActive,
+            hover: guideColorHover,
+            default: guideColorDefault,
+            preview: guideColorPreview,
+            previewEmphasized: guidePreviewEmphasized,
+          },
+          preview: guidePreview,
+          onPointerDown: handleGuidePointerDown,
+           onPointerUp: handleGuidePointerUp,
+           onPointerCancel: handleGuidePointerUp,
+           onRemoveGuides: removeGuides,
+         },
+        arrows: {
+          items: arrows,
+          selectedIds: selectedArrowIds,
+          moveOffset: selectionDragOffset,
+          preview: arrowsPointer.preview,
+          scrollOffset,
+          color: settings.arrowColor,
+          onSelect: (id) => setSelectedArrowIdsPersisted([id]),
+          onChange: (arrow) =>
+            setArrowsPersisted((previous) =>
+              previous.map((item) => (item.id === arrow.id ? arrow : item)),
+            ),
+          onChangeStart: recordSnapshot,
+          editingArrowId: arrowsPointer.editingArrowId,
+          interactive: overlayInteractive && toolMode === "selection",
+        },
+        pen: {
+          strokes: penStrokes,
+          preview: penPreview,
+          inHand: penInHandNow,
+          eraser: eraserRadius,
+          scrollOffset,
+          selectionMode: toolMode === "selection",
+          selectedIds: selectedPenStrokeIds,
+          moveOffset: selectionDragOffset,
+          onSelect: selectPenStroke,
+          onChange: changePenStroke,
+          onChangeStart: recordSnapshot,
+          onMoveStart: (id: string) => beginMoveSession({ penId: id }),
+          onMove: (_id, dx, dy) => moveFromSession(dx, dy),
+          onMoveEnd: endMoveSession,
+        },
+        text: {
+          items: textAnnotations,
+          draft: textDraft,
+          draftInputRef: textDraftInputRef,
+          interactive: toolMode === "selection",
+          editable: toolMode === "text",
+          selectedIds: selectedTextIds,
+          moveOffset: selectionDragOffset,
+          onSelect: selectTextAnnotation,
+          onMoveStart: (id: string) => {
+            recordSnapshot()
+            beginMoveSession({ textId: id })
+          },
+          onMove: (_id, dx, dy) => moveFromSession(dx, dy),
+          onMoveEnd: endMoveSession,
+          onChangeStart: recordSnapshot,
+          onTransform: transformTextAnnotation,
+          onEdit: editTextAnnotation,
+          scrollOffset,
+          onDraftKeyDown: handleTextKeyDown,
+          onDraftBlur: () => finishTextDraft(false, true),
+          onActivateEditor: activateTextEditor,
+          style: settings.textStyle,
+        },
+        comments: overlayComments.length > 0 || toolMode === "comments" ? {
+          comments: overlayComments,
+          commentFilter,
+          rects: commentRuntimeSnapshot.rects,
+          unresolvedIds: commentRuntimeSnapshot.unresolvedIds,
+          hoverRect: commentRuntimeSnapshot.hoverRect,
+          hoverPoint: commentRuntimeSnapshot.hoverPoint,
+          draft: commentDraft,
+          selectedId: selectedCommentId,
+          draftText: commentPointer.draftText,
+          onDraftTextChange: commentPointer.onDraftTextChange,
+          onDraftKeyDown: commentPointer.onDraftKeyDown,
+           onSelect: setSelectedCommentId,
+           onClickComment: commentPointer.onClickComment,
+          onClose: () => setSelectedCommentId(null),
+          movingId: commentPointer.movingId,
+          onStartMove: commentPointer.onStartMove,
+          onMoveComment: commentPointer.onMoveComment,
+           onEndMove: commentPointer.onEndMove,
+           ownerDocument,
+           onAddMessage: addCommentMessage,
+            onToggleResolved: toggleResolvedComment,
+            onDelete: deleteComment,
+           onDeleteMessage: deleteCommentMessage,
+           onEditMessage: updateCommentMessage,
+           onDraftSubmit: commentPointer.onDraftSubmit,
+           onDraftCancel: commentPointer.onDraftCancel,
+        } : undefined,
+      }}
+        screenshot={screenRecording.selecting ? {
+          active: true,
+          mode: "recording",
+          adjusting: screenRecording.adjusting,
+          rect: screenRecording.rect,
+          onConfirm: screenRecording.confirmRecording,
+          viewport: screenRecording.viewportSize(),
+          onSizeChange: screenRecording.setRectSize,
+          onPositionChange: screenRecording.setRectPosition,
+          onMoveStart: screenRecording.onMoveStart,
+          onResizeStart: screenRecording.onResizeStart,
+          onPointerDown: screenRecording.onPointerDown,
+          onPointerMove: screenRecording.onPointerMove,
+          onPointerUp: screenRecording.onPointerUp,
+          onPointerCancel: screenRecording.onPointerCancel,
+        } : {
+          active: features.screenshot && screenshot.active,
+          rect: features.screenshot ? screenshot.rect : null,
+          onPointerDown: screenshot.handlePointerDown,
+          onPointerMove: screenshot.handlePointerMove,
+          onPointerUp: screenshot.handlePointerUp,
+          onPointerCancel: screenshot.handlePointerCancel,
+        }}
+        screenRecording={{
+          recording: screenRecording.recording,
+          rect: screenRecording.recordingRect,
+        }}
+        toolbar={{
+        eventTarget: ownerWindow,
+        initialPosition: settings.toolbarPosition ?? initialState?.toolbarPosition ?? { x: 16, y: 16 },
+        onPositionChange: settings.setToolbarPosition,
+        dock: settings.toolbarDock,
+        autoHide: settings.toolbarAutoHide,
+        pen: {
+          pens,
+          kind: settings.penKind,
+          eraserWidth,
+          onKind: settings.setPenKind,
+          onChange: (setting) =>
+            settings.setPenSettings((previous) => ({
+              ...previous,
+              [settings.penKind]: { ...previous[settings.penKind], ...setting },
+            })),
+        },
+        text: {
+          style: settings.textStyle,
+          onChange: (style) => settings.setTextStyle((previous) => ({ ...previous, ...style })),
+        },
+        minimized,
+        onInteract: activateToolbar,
+        onRestore: restoreToolbar,
+        onCancelTransient: clearAllTransientState,
+        features,
+        tools: {
+          mode: toolMode,
+          setMode: setToolModeWithHistory,
+          setEnabled: setEnabledWithHistory,
+          xrayVisible,
+          setXrayVisible,
+          rulersVisible,
+          setRulersVisible: setRulersVisiblePersisted,
+          guideOrientation,
+          setGuideOrientation: setGuideOrientationWithHistory,
+          clearSelection,
+        },
+        layoutGuides: {
+          items: layoutGuides,
+          onChange: setLayoutGuidesWithHistory,
+          onToggle: toggleLayoutGuides,
+          visible: layoutGuidesVisible,
+        },
+        responsive: { open: responsiveOpen, onToggle: toggleResponsive },
+        colorPicker: {
+          active: colorPicker.active,
+          setActive: colorPicker.setActive,
+          onClick: openColorPicker,
+          panel: (
+            <ColorPanel
+              active={colorPicker.active}
+              sample={colorPicker.sample}
+              unsupported={colorPicker.unsupported}
+              ownerWindow={ownerWindow}
+              formats={settings.colorPickerFormats}
+              favoriteFormat={settings.colorPickerClickFormat}
+              onClose={closeColorPicker}
+            />
+          ),
+        },
+        screenshot: {
+          active: screenshot.active,
+          error: screenshot.error,
+          previewUrl: screenshot.previewUrl,
+          copy: settings.screenshotSettings.copy,
+          download: settings.screenshotSettings.download,
+          shareMode: settings.screenshotSettings.shareMode,
+          onClick: screenshot.toggleSelection,
+          onCancel: screenshot.closeUi,
+          onPreviewExited: screenshot.dismissPreview,
+        },
+        screenRecording: {
+            selecting: screenRecording.selecting,
+            recording: screenRecording.recording,
+           elapsed: screenRecording.elapsed,
+           error: screenRecording.error,
+           panel: screenRecording.recording
+             ? <ScreenRecordingTimer elapsed={screenRecording.elapsed} onStop={screenRecording.stop} />
+             : screenRecording.video
+               ? <ScreenRecordingEditor url={screenRecording.video.url} playerUrl={screenRecording.video.playerUrl} duration={screenRecording.video.duration} ownerDocument={ownerDocument} onDiscard={screenRecording.discard} onExport={screenRecording.exportClip} />
+               : null,
+           onClick: screenRecording.toggleSelection,
+          onCancel: screenRecording.cancelSelection,
+          onStop: screenRecording.stop,
+         },
+          motion: {
+            element: motionElement,
+             playable: selectedMotionPlayable,
+              observedProperties: selectedObservedProperties,
+              observedTargets: selectedObservedTargets,
+             inspectDetails: (motionDetails) => displayedSelectedMeasurements[0] ? (
+              <InspectInfoCard
+                  embedded
+                  motionDetails={motionDetails}
+                ownerWindow={ownerWindow}
+                rect={displayedSelectedMeasurements[0].rect}
+                 element={motionElement}
+                measurement={displayedSelectedMeasurements[0]}
+                layoutDetailsEnabled={settings.layoutDetailsEnabled}
+                copied={isSelectorCopied(selectedElement)}
+                typography={selectedMeasurements.length === 1 ? selectedTypography : null}
+              />
+            ) : null,
+          },
+          comments: {
+          count: comments.length,
+          comments,
+          unresolvedIds: commentRuntimeSnapshot.unresolvedIds,
+          selectedId: selectedCommentId,
+          onSelect: (id) => {
+            setEnabled(true)
+            // A comment is looked at where it was left: in the previews, with one of its size
+            // among them, or on the page. Going from one to the other leaves this list open.
+            const target = comments.find((comment) => comment.id === id)?.target
+            if (Boolean(target?.preview) !== responsiveOpen) {
+              toggleResponsive()
+              setOpenMenu(openMenu)
+            }
+            if (target?.preview && target.viewport) setWantedPreview({ ...target.viewport })
+            setToolMode("comments")
+            setSelectedCommentId(id)
+            const element = commentRuntime.getElement(id)
+            // Not there yet when its preview is only now being opened: shown once it is found.
+            if (element?.isConnected && element.ownerDocument.defaultView) scrollElementIntoView(element)
+            else revealCommentRef.current = id
+          },
+           onDelete: deleteComment,
+           onDeleteAll: deleteAllComments,
+           onResolveAll: resolveAllCommentsWithFeedback,
+           onToggleResolved: toggleResolvedComment,
+           statusFilter: commentFilter,
+           onStatusFilterChange: setCommentFilterAndSelection,
+          onCopy: copyAllComments,
+        },
+        settings: {
+          open: settingsOpen,
+          setOpen: setSettingsOpen,
+          onToggle: toggleSettings,
+          panel: (
+            <SettingsPanel
+              ownerWindow={ownerWindow}
+              focusSection={settingsFocus}
+              select={{
+                highlightColor: settings.highlightColor,
+                setHighlightColor: settings.setHighlightColor,
+                hoverHighlight: settings.hoverHighlightEnabled,
+                setHoverHighlight: settings.setHoverHighlightEnabled,
+                layoutDetailsEnabled: settings.layoutDetailsEnabled,
+                setLayoutDetailsEnabled: settings.setLayoutDetailsEnabled,
+                snapEnabled,
+                setSnapEnabled,
+                multiMeasureEnabled,
+                setMultiMeasureEnabled,
+                 infoCardMode: settings.infoCardMode,
+                 setInfoCardMode: settings.setInfoCardMode,
+              }}
+              guides={{
+                guideColor: settings.guideColor,
+                setGuideColor: settings.setGuideColor,
+                guideStyle: settings.guideStyle,
+                setGuideStyle: settings.setGuideStyle,
+                snapGuidesEnabled,
+                setSnapGuidesEnabled,
+                guideHighlightEnabled: settings.guideHighlightEnabled,
+                setGuideHighlightEnabled: settings.setGuideHighlightEnabled,
+                selectNewGuideEnabled,
+                setSelectNewGuideEnabled,
+              }}
+              color={{
+                colorFormats: settings.colorPickerFormats,
+                setColorFormats: settings.setColorPickerFormats,
+                colorClickFormat: settings.colorPickerClickFormat,
+                setColorClickFormat: settings.setColorPickerClickFormat,
+              }}
+              camera={{
+                settings: settings.screenshotSettings,
+                setSettings: settings.setScreenshotSettings,
+              }}
+              rulers={{
+                settings: settings.rulerSettings,
+                setSettings: settings.setRulerSettings,
+              }}
+              arrows={{
+                color: settings.arrowColor,
+                setColor: setArrowColor,
+                snapArrowsEnabled,
+                setSnapArrowsEnabled,
+                arrowClickToPlace,
+                setArrowClickToPlace,
+              }}
+              general={{
+                persistOnReload: settings.persistOnReload,
+                setPersistOnReload: settings.setPersistOnReload,
+                shortcutsEnabled: settings.shortcutsEnabled,
+                setShortcutsEnabled: settings.setShortcutsEnabled,
+                theme: settings.theme,
+                setTheme: settings.setTheme,
+                toolbarDock: settings.toolbarDock,
+                setToolbarDock: settings.setToolbarDock,
+                toolbarAutoHide: settings.toolbarAutoHide,
+                setToolbarAutoHide: settings.setToolbarAutoHide,
+                onMinimize: minimizeMesurer,
+                onResetSettings: resetSettings,
+                onClearWorkspace: clearWorkspace,
+                onSaveReview: features.review ? saveReview : undefined,
+                reviewSaveStatus,
+              }}
+            />
+          ),
+        },
+        openMenu,
+        setOpenMenu,
+      }}
+    />
+  );
+}

@@ -5,6 +5,7 @@ dist/
 .DS_Store
 .turbo/
 .vite/
+.wrangler/
 coverage/
 test-results/
 playwright-report/
@@ -14,5 +15,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 packages/mesurer/styles.generated.css
+packages/mesurer/styles.generated.ts
 *.tsbuildinfo
 *.tgz
+*.zip
+apps/extension/mesurer-extension-*/

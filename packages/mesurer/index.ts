@@ -1,5 +1,7 @@
-export { default as Measurer } from "./measurer";
-export type { MeasurerProps } from "./measurer";
+export { default as Mesurer } from "./mesurer";
+export type { MesurerProps } from "./mesurer";
+export type { MesurerFeatures } from "./core/features";
+export type { Arrow, PenStroke, Point, TextAnnotation } from "./core/types";
 export {
   createTextInspector,
   TextInspector,
@@ -15,16 +17,26 @@ export type {
 export type { ColorPickerFormat, ColorSample } from "./core/colors";
 export {
   createLocalStoragePersistence,
+  createPageScopedPersistence,
   MESURER_STORAGE_VERSION,
   normalizeStoredSettings,
   normalizeStoredWorkspace,
+  isPagedWorkspaceStore,
 } from "./core/persistence";
 export type {
   MesurerPersistence,
   MesurerPersistenceSnapshot,
   MesurerStoredSettings,
   MesurerStoredWorkspace,
+  PagedWorkspaceStore,
+  MesurerPageArtifacts,
+  MesurerSessionChrome,
   GuidePattern,
   GuideStyle,
   RulerSettings,
+  ScreenshotSettings,
+  ShareMode,
+  TextBackground,
+  TextFont,
+  TextStyleSettings,
 } from "./core/persistence";

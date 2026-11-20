@@ -1,5 +1,7 @@
-import { getRectFromDom } from "./dom"
+import { getRectFromDom, isConnectedElement } from "./dom"
+import { withOverlayHitTesting } from "./overlay-hit-test"
 import type { InspectMeasurement, Point } from "./types"
+import { projectPoint } from "./frame-geometry"
 
 const getOverlayHost = (overlayNode: HTMLDivElement | null) => {
   if (!overlayNode) return null
@@ -22,13 +24,12 @@ export const getSelectedMeasurementHit = (params: {
   document?: Document
 }) => {
   const ownerDocument = params.document ?? document
-  const HTMLElementConstructor =
-    ownerDocument.defaultView?.HTMLElement ?? HTMLElement
+  const ElementConstructor = ownerDocument.defaultView?.Element ?? Element
   const overlayHost = getOverlayHost(params.overlayNode)
   const candidates = params.selectedMeasurements
     .map((measurement) => {
       const element = measurement.elementRef
-      if (!element || !ownerDocument.contains(element)) return null
+      if (!isConnectedElement(element)) return null
       const rect = getRectFromDom(element)
       return {
         measurement,
@@ -42,9 +43,11 @@ export const getSelectedMeasurementHit = (params: {
 
   if (candidates.length === 0) return null
 
-  const stack = ownerDocument.elementsFromPoint(params.point.x, params.point.y)
+  const stack = withOverlayHitTesting(params.overlayNode, () =>
+    ownerDocument.elementsFromPoint(params.point.x, params.point.y),
+  )
   for (const element of stack) {
-    if (!(element instanceof HTMLElementConstructor)) continue
+    if (!(element instanceof ElementConstructor)) continue
     if (params.overlayNode && params.overlayNode.contains(element)) continue
     if (overlayHost && element === overlayHost) continue
     for (const candidate of candidates) {
@@ -57,13 +60,14 @@ export const getSelectedMeasurementHit = (params: {
     }
   }
 
+  const viewportPoint = projectPoint(params.point, ownerDocument)
   for (const candidate of candidates) {
     const { rect } = candidate
     const inRect =
-      params.point.x >= rect.left &&
-      params.point.x <= rect.left + rect.width &&
-      params.point.y >= rect.top &&
-      params.point.y <= rect.top + rect.height
+      viewportPoint.x >= rect.left &&
+      viewportPoint.x <= rect.left + rect.width &&
+      viewportPoint.y >= rect.top &&
+      viewportPoint.y <= rect.top + rect.height
     if (inRect) return candidate.measurement
   }
 

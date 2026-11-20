@@ -2,37 +2,19 @@
 
 import { memo } from "react"
 import type { EdgeVisibility } from "../core/edge-visibility"
-import { MeasureTag } from "./measure-tag"
-
-type Rect = {
-  left: number
-  top: number
-  width: number
-  height: number
-}
-
-type SelectedMeasurement = {
-  rect: Rect
-  paddingRect: Rect
-  marginRect: Rect
-  originRect?: Rect
-}
+import type { InspectMeasurement } from "../core/types"
 
 type SelectedMeasurementBoxProps = {
-  measurement: SelectedMeasurement
+  measurement: InspectMeasurement
   transitionMs: number
-  labelOffset: number
   edgeVisibility?: EdgeVisibility
   outlineColor: string
   fillColor: string
 }
 
-const formatValue = (value: number) => Math.round(value)
-
 export const SelectedMeasurementBox = memo(function SelectedMeasurementBox({
   measurement,
   transitionMs,
-  labelOffset,
   edgeVisibility,
   outlineColor,
   fillColor,
@@ -51,7 +33,9 @@ export const SelectedMeasurementBox = memo(function SelectedMeasurementBox({
           width: displayRect.width,
           height: displayRect.height,
           backgroundColor: fillColor,
-          transition: `left ${transitionMs}ms ease, top ${transitionMs}ms ease, width ${transitionMs}ms ease, height ${transitionMs}ms ease`,
+          transition: measurement.originRect
+            ? `left ${transitionMs}ms ease, top ${transitionMs}ms ease, width ${transitionMs}ms ease, height ${transitionMs}ms ease`
+            : "none",
         }}
       >
         {edges.top ? (
@@ -79,16 +63,6 @@ export const SelectedMeasurementBox = memo(function SelectedMeasurementBox({
           />
         ) : null}
       </div>
-      <MeasureTag
-        className="msr:-translate-x-1/2 msr:bg-ink-900/90"
-        style={{
-          left: displayRect.left + displayRect.width / 2,
-          top: displayRect.top + displayRect.height + labelOffset,
-          transition: `left ${transitionMs}ms ease, top ${transitionMs}ms ease`,
-        }}
-      >
-        {formatValue(displayRect.width)} x {formatValue(displayRect.height)}
-      </MeasureTag>
     </div>
   )
 })

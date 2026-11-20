@@ -1,10 +1,12 @@
 import type { Dispatch, RefObject, SetStateAction } from "react"
-import { useEffect, useRef } from "react"
-import { getDistanceOverlay } from "../core/distances"
-import { getInspectMeasurement, getRectFromDom } from "../core/dom"
+import { useLayoutEffect, useRef } from "react"
+import { applyPinCursor, getDistanceOverlay, withPin } from "../core/distances"
+import { getRectFromDom, isConnectedElement, refreshInspectMeasurement } from "../core/dom"
+import { getGuideRect } from "../core/guides"
 import { normalizeRect, rectAlmostEqual } from "../core/geometry"
 import type {
   DistanceOverlay,
+  Guide,
   InspectMeasurement,
   Measurement,
   Rect,
@@ -14,9 +16,12 @@ type LiveParams = {
   document: Document
   window: Window
   enabled: boolean
+  active: boolean
   selectionEnabled: boolean
-  selectedElementRef: RefObject<HTMLElement | null>
-  hoverElementRef: RefObject<HTMLElement | null>
+  guides: Guide[]
+  selectedMeasurements: InspectMeasurement[]
+  selectedElementRef: RefObject<Element | null>
+  hoverElementRef: RefObject<Element | null>
   setSelectedMeasurement: Dispatch<SetStateAction<InspectMeasurement | null>>
   setSelectedMeasurements: Dispatch<SetStateAction<InspectMeasurement[]>>
   setHoverRect: Dispatch<SetStateAction<Rect | null>>
@@ -30,9 +35,9 @@ export const useLiveElementTracking = (params: LiveParams) => {
   paramsRef.current = params
   const frameRef = useRef<number | null>(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const ownerWindow = params.window
-    if (!params.enabled) {
+    if (!params.enabled || !params.active) {
       if (frameRef.current) {
         ownerWindow.cancelAnimationFrame(frameRef.current)
       }
@@ -42,11 +47,13 @@ export const useLiveElementTracking = (params: LiveParams) => {
 
     const tick = () => {
       const current = paramsRef.current
-      current.setMeasurements((prev) =>
-        prev.map((measurement) => {
+      current.setMeasurements((prev) => {
+        if (prev.length === 0) return prev
+        let changed = false
+        const next = prev.map((measurement) => {
           if (
             !measurement.elementRef ||
-            !current.document.contains(measurement.elementRef)
+            !isConnectedElement(measurement.elementRef)
           ) {
             return measurement
           }
@@ -54,6 +61,7 @@ export const useLiveElementTracking = (params: LiveParams) => {
           const rect = getRectFromDom(measurement.elementRef)
           if (rectAlmostEqual(rect, measurement.rect)) return measurement
 
+          changed = true
           return {
             ...measurement,
             rect,
@@ -61,10 +69,11 @@ export const useLiveElementTracking = (params: LiveParams) => {
             originRect: undefined,
           }
         })
-      )
+        return changed ? next : prev
+      })
 
       current.setActiveMeasurement((prev) => {
-        if (!prev?.elementRef || !current.document.contains(prev.elementRef))
+        if (!prev?.elementRef || !isConnectedElement(prev.elementRef))
           return prev
         const rect = getRectFromDom(prev.elementRef)
         if (rectAlmostEqual(rect, prev.rect)) return prev
@@ -76,25 +85,55 @@ export const useLiveElementTracking = (params: LiveParams) => {
         }
       })
 
-      current.setHeldDistances((prev) =>
-        prev.map((distance) => {
-          const canTrackA =
-            distance.elementRefA && current.document.contains(distance.elementRefA)
-          const canTrackB =
-            distance.elementRefB && current.document.contains(distance.elementRefB)
-          if (!canTrackA && !canTrackB) return distance
+      current.setHeldDistances((prev) => {
+        if (prev.length === 0) return prev
+        let changed = false
+        const next = prev.map((distance) => {
+          let nextDistance = distance
+          if (
+            distance.pinTargetRef &&
+            isConnectedElement(distance.pinTargetRef)
+          ) {
+            const pinTargetRect = getRectFromDom(distance.pinTargetRef)
+            if (
+              !distance.pinTargetRect ||
+              !rectAlmostEqual(pinTargetRect, distance.pinTargetRect)
+            ) {
+              nextDistance = applyPinCursor({
+                ...nextDistance,
+                pinTargetRect,
+              })
+              changed = true
+            }
+          }
 
-          const rectA = canTrackA
+          const canTrackA =
+            distance.elementRefA && isConnectedElement(distance.elementRefA)
+          const canTrackB =
+            distance.elementRefB && isConnectedElement(distance.elementRefB)
+          const guideA = distance.guideIds?.[0]
+            ? current.guides.find((guide) => guide.id === distance.guideIds?.[0])
+            : null
+          const guideB = distance.guideIds?.[1]
+            ? current.guides.find((guide) => guide.id === distance.guideIds?.[1])
+            : null
+          if (!canTrackA && !canTrackB && !guideA && !guideB) return nextDistance
+
+          const rectA = guideA
+            ? getGuideRect(guideA, ownerWindow)
+            : canTrackA
             ? getRectFromDom(distance.elementRefA!)
             : distance.rectA
-          const rectB = canTrackB
+          const rectB = guideB
+            ? getGuideRect(guideB, ownerWindow)
+            : canTrackB
             ? getRectFromDom(distance.elementRefB!)
             : distance.rectB
           if (
-            rectAlmostEqual(rectA, distance.rectA) &&
-            rectAlmostEqual(rectB, distance.rectB)
+            rectAlmostEqual(rectA, nextDistance.rectA) &&
+            rectAlmostEqual(rectB, nextDistance.rectB)
           ) {
-            return distance
+            return nextDistance
           }
 
           const updated = getDistanceOverlay(
@@ -105,59 +144,51 @@ export const useLiveElementTracking = (params: LiveParams) => {
             ownerWindow,
           )
 
-          return {
-            ...updated,
-            id: distance.id,
-          }
+          changed = true
+          return withPin(updated, nextDistance)
         })
-      )
+        return changed ? next : prev
+      })
 
-      const selected = current.selectedElementRef.current
-      if (current.selectionEnabled && selected && current.document.contains(selected)) {
+      const selected = current.selectedElementRef.current ?? current.selectedMeasurements[current.selectedMeasurements.length - 1]?.elementRef ?? null
+      if (isConnectedElement(selected)) {
         current.setSelectedMeasurement((prev) => {
-          const next = getInspectMeasurement(selected, ownerWindow)
-          if (prev && rectAlmostEqual(prev.rect, next.rect)) return prev
+          if (!prev) return prev
+          const next = refreshInspectMeasurement(prev, ownerWindow)
+          if (prev.elementRef === next.elementRef && rectAlmostEqual(prev.rect, next.rect)) return prev
           return next
         })
       }
 
-      if (current.selectionEnabled) {
-        current.setSelectedMeasurements((prev) =>
-          prev.map((measurement) => {
-            if (
-              !measurement.elementRef ||
-              !current.document.contains(measurement.elementRef)
-            ) {
-              return measurement
-            }
-            const next = getInspectMeasurement(measurement.elementRef, ownerWindow)
-            if (rectAlmostEqual(next.rect, measurement.rect)) return measurement
-            return {
-              ...next,
-              id: measurement.id,
-            }
-          })
-        )
-      }
+      current.setSelectedMeasurements((prev) => {
+        if (prev.length === 0) return prev
+        let changed = false
+        const next = prev.map((measurement) => {
+          if (!measurement.elementRef || !isConnectedElement(measurement.elementRef)) return measurement
+          const refreshed = refreshInspectMeasurement(measurement, ownerWindow)
+          if (rectAlmostEqual(refreshed.rect, measurement.rect)) return measurement
+          changed = true
+          return refreshed
+        })
+        return changed ? next : prev
+      })
 
       const hover = current.hoverElementRef.current
-      if (current.selectionEnabled && hover && current.document.contains(hover)) {
+      if (isConnectedElement(hover)) {
         const rect = getRectFromDom(hover)
         current.setHoverRect((prev) =>
           prev && rectAlmostEqual(prev, rect) ? prev : rect
         )
       }
-
       frameRef.current = ownerWindow.requestAnimationFrame(tick)
     }
 
     frameRef.current = ownerWindow.requestAnimationFrame(tick)
-
     return () => {
       if (frameRef.current) {
         ownerWindow.cancelAnimationFrame(frameRef.current)
       }
       frameRef.current = null
     }
-  }, [params.enabled, params.window])
+  }, [params.active, params.enabled, params.window])
 }

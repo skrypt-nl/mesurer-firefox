@@ -1,7 +1,7 @@
 {
   "name": "mesurer",
-  "version": "0.0.11",
-  "description": "Measure and align elements on any website.",
+  "version": "0.2.7",
+  "description": "Inspect, annotate, and give feedback on any live interface",
   "license": "MIT",
   "author": "Julien Thibeaut",
   "type": "module",
@@ -22,6 +22,7 @@
     "dist/styles.css",
     "CHANGELOG.md",
     "README.md",
+    "PRIVACY.md",
     "LICENSE"
   ],
   "sideEffects": [
@@ -39,9 +40,12 @@
     "url": "https://github.com/ibelick/mesurer/issues"
   },
   "scripts": {
-    "build": "pnpm exec tailwindcss -i styles.css -o styles.generated.css && node scripts/generate-styles.mjs && tsup && pnpm exec tailwindcss -i styles.css -o dist/styles.css",
+    "generate:styles": "pnpm exec tailwindcss -i styles.css -o styles.generated.css -m && node scripts/generate-styles.mjs",
+    "build": "pnpm run generate:styles && tsup && pnpm exec tailwindcss -i styles.css -o dist/styles.css -m",
     "dev": "node scripts/dev.mjs",
+    "pretypecheck": "pnpm run generate:styles",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "prepublishOnly": "npm run typecheck && npm run build"
   },
   "peerDependencies": {
@@ -56,10 +60,14 @@
     "react-dom": "^19.0.0",
     "tailwindcss": "^4.2.2",
     "tsup": "^8.5.0",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
   },
   "keywords": [
     "measurement",
     "alignment"
-  ]
+  ],
+  "dependencies": {
+    "@zumer/snapdom": "^3.0.0"
+  }
 }

@@ -1,8 +1,140 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { captureCommentTarget, resolveCommentTarget } from "../../../../packages/mesurer/comments/dom";
+import { createActiveTabRegistry } from "../../../extension/src/active-tabs";
+import { PERSIST_DEFAULT_KEY, STYLES_KEY } from "../../../extension/src/messages";
+import { MESURER_STYLES } from "../../../../packages/mesurer/styles.generated";
+import {
+  captureDomFingerprint,
+  captureReviewSnapshot,
+  createEphemeralReviewUrl,
+  createLocalReviewStateStorage,
+  deserializeReviewState,
+  loadReviewViewer,
+  restoreReviewWorkspace,
+  saveReviewViewer,
+  resolveDomFingerprint,
+  serializeReviewState,
+} from "../../../../packages/mesurer/core/review";
+import { captureDocumentWithSnapdom } from "../../../../packages/mesurer/core/review/capture";
+import { createLocalStoragePersistence } from "../../../../packages/mesurer/core/persistence";
+import {
+  createIndexedDbSyncStore,
+  createMemorySyncStore,
+  createSyncEngine,
+} from "../../../../packages/mesurer/core/sync";
+import { SyncTransportError } from "../../../../packages/mesurer/core/sync/types";
+import { createSyncTestHarness } from "./sync-harness";
+
+export type SyncTestApi = {
+  createSyncTestHarness: typeof createSyncTestHarness;
+  createIndexedDbSyncStore: typeof createIndexedDbSyncStore;
+  createLocalStoragePersistence: typeof createLocalStoragePersistence;
+  createMemorySyncStore: typeof createMemorySyncStore;
+  createSyncEngine: typeof createSyncEngine;
+  SyncTransportError: typeof SyncTransportError;
+};
+
+export type CommentTargetTestApi = {
+  captureCommentTarget: typeof captureCommentTarget;
+  resolveCommentTarget: typeof resolveCommentTarget;
+};
+
+export type ReviewStateTestApi = {
+  captureDocumentWithSnapdom: typeof captureDocumentWithSnapdom;
+  captureDomFingerprint: typeof captureDomFingerprint;
+  captureReviewSnapshot: typeof captureReviewSnapshot;
+  createEphemeralReviewUrl: typeof createEphemeralReviewUrl;
+  createLocalReviewStateStorage: typeof createLocalReviewStateStorage;
+  deserializeReviewState: typeof deserializeReviewState;
+  loadReviewViewer: typeof loadReviewViewer;
+  resolveDomFingerprint: typeof resolveDomFingerprint;
+  restoreReviewWorkspace: typeof restoreReviewWorkspace;
+  saveReviewViewer: typeof saveReviewViewer;
+  serializeReviewState: typeof serializeReviewState;
+};
+
+export type ActiveTabTestApi = {
+  createActiveTabRegistry: typeof createActiveTabRegistry;
+};
+
+const stealPagePrompt = new URLSearchParams(location.search).has("prompt");
+
+Object.assign(window, {
+  __mesurerCommentTargetTest: { captureCommentTarget, resolveCommentTarget },
+  __mesurerActiveTabTest: { createActiveTabRegistry },
+  __mesurerReviewStateTest: {
+    captureDocumentWithSnapdom,
+    captureDomFingerprint,
+    captureReviewSnapshot,
+    createEphemeralReviewUrl,
+    createLocalReviewStateStorage,
+    deserializeReviewState,
+    loadReviewViewer,
+    resolveDomFingerprint,
+    restoreReviewWorkspace,
+    saveReviewViewer,
+    serializeReviewState,
+  },
+  __mesurerSyncTest: {
+    createSyncTestHarness,
+    createIndexedDbSyncStore,
+    createLocalStoragePersistence,
+    createMemorySyncStore,
+    createSyncEngine,
+    SyncTransportError,
+  },
+});
+
+function ShadowCommentTarget() {
+  const hostRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || host.shadowRoot) return;
+    const shadow = host.attachShadow({ mode: "open" });
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Shadow comment button";
+    button.style.cssText = "width: 200px; height: 100px; border: 0; background: #d4d4d8;";
+    shadow.append(button);
+  }, []);
+
+  return <div ref={hostRef} id="shadow-comment-host" data-testid="shadow-comment-host" style={{ position: "absolute", left: 760, top: 240, width: 200, height: 100 }} />;
+}
+
+function VideoCardTarget() {
+  return (
+    <article
+      data-testid="video-card-target"
+      style={{
+        position: "absolute",
+        left: 760,
+        top: 40,
+        width: 280,
+        height: 180,
+        overflow: "hidden",
+        background: "#27272a",
+      }}
+    >
+      <video
+        data-testid="video-card-media"
+        muted
+        playsInline
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+      />
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", padding: 16 }}>
+        <h3 data-testid="video-card-title" style={{ color: "white", fontSize: 24 }}>
+          Gemini Audio
+        </h3>
+      </div>
+    </article>
+  );
+}
 
 function Fixture() {
   const [clicks, setClicks] = useState(0);
+  const [promptValue, setPromptValue] = useState("");
 
   return (
     <>
@@ -19,6 +151,51 @@ function Fixture() {
       >
         Underlying app button
       </button>
+      <ShadowCommentTarget />
+      <VideoCardTarget />
+      <div
+        data-testid="layout-flex"
+        style={{
+          position: "absolute",
+          left: 520,
+          top: 240,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          padding: 16,
+          width: 200,
+          boxSizing: "border-box",
+          background: "#f4f4f5",
+        }}
+      >
+        <span>Layout item one</span>
+        <span>Layout item two</span>
+      </div>
+      <div
+        data-testid="nested-target"
+        style={{
+          position: "absolute",
+          left: 520,
+          top: 420,
+          width: 200,
+          height: 120,
+          padding: 20,
+          boxSizing: "border-box",
+          background: "#e4e4e7",
+        }}
+      >
+        <button
+          type="button"
+          style={{
+            width: "100%",
+            height: "100%",
+            border: 0,
+            background: "#d4d4d8",
+          }}
+        >
+          Nested inner button
+        </button>
+      </div>
       <button
         type="button"
         style={{
@@ -33,9 +210,49 @@ function Fixture() {
         Secondary app button
       </button>
       <output data-testid="underlying-click-count">{clicks}</output>
+      <input
+        data-testid="page-field"
+        aria-label="Page field"
+        style={{
+          position: "absolute",
+          left: 40,
+          top: 640,
+          width: 280,
+          height: 32,
+        }}
+      />
+      {stealPagePrompt ? (
+        <textarea
+          data-testid="page-prompt"
+          aria-label="Page prompt"
+          autoFocus
+          value={promptValue}
+          onChange={(event) => setPromptValue(event.target.value)}
+          onBlur={(event) => event.currentTarget.focus()}
+          style={{
+            position: "absolute",
+            left: 40,
+            top: 40,
+            width: 280,
+            height: 48,
+          }}
+        />
+      ) : null}
+      <svg
+        data-testid="svg-target"
+        viewBox="0 0 240 120"
+        style={{ position: "absolute", left: 40, top: 100, width: 240, height: 120 }}
+      >
+        <rect data-testid="svg-rect" x="20" y="20" width="200" height="80" fill="#a1a1aa" />
+      </svg>
     </>
   );
 }
 
 createRoot(document.getElementById("root")!).render(<Fixture />);
+// The extension's background hands the content script Mesurer's stylesheet. There is none here,
+// so this page does it: without it Mesurer comes up unstyled, and nothing on it can be pressed.
+Object.assign(globalThis, { [STYLES_KEY]: MESURER_STYLES });
+// The tests here start from Persist being off, and switch it on where they are about it.
+Object.assign(globalThis, { [PERSIST_DEFAULT_KEY]: false });
 await import("../../../extension/src/content");

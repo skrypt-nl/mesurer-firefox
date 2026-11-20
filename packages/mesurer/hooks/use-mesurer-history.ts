@@ -1,0 +1,414 @@
+import { useCallback, useRef } from "react"
+import type { SetStateAction } from "react"
+import type {
+  DistanceOverlay,
+  Guide,
+  InspectMeasurement,
+  Measurement,
+  Arrow,
+  TextAnnotation,
+  PenStroke,
+  CommentThread,
+  ToolMode,
+} from "../core/types"
+import type { LayoutGuide } from "../core/layout-guides"
+
+type GuideOrientation = "vertical" | "horizontal"
+
+type MesurerSnapshot = {
+  enabled: boolean
+  toolMode: ToolMode
+  guideOrientation: GuideOrientation
+  measurements: Measurement[]
+  activeMeasurement: Measurement | null
+  selectedMeasurements: InspectMeasurement[]
+  selectedMeasurement: InspectMeasurement | null
+  heldDistances: DistanceOverlay[]
+  guides: Guide[]
+  selectedGuideIds: string[]
+  draggingGuideId: string | null
+  arrows: Arrow[]
+  selectedArrowIds: string[]
+  textAnnotations: TextAnnotation[]
+  penStrokes: PenStroke[]
+  selectedPenStrokeIds: string[]
+  comments: CommentThread[]
+  layoutGuides: LayoutGuide[]
+}
+
+type UseMesurerHistoryArgs = {
+  toggles: {
+    enabled: boolean
+    setEnabled: (value: SetStateAction<boolean>) => void
+    toolMode: ToolMode
+    setToolMode: (value: SetStateAction<ToolMode>) => void
+    guideOrientation: GuideOrientation
+    setGuideOrientation: (value: SetStateAction<GuideOrientation>) => void
+  }
+  measurements: {
+    measurements: Measurement[]
+    setMeasurements: (value: SetStateAction<Measurement[]>) => void
+    activeMeasurement: Measurement | null
+    setActiveMeasurement: (value: SetStateAction<Measurement | null>) => void
+    selectedMeasurements: InspectMeasurement[]
+    setSelectedMeasurements: (
+      value: SetStateAction<InspectMeasurement[]>
+    ) => void
+    selectedMeasurement: InspectMeasurement | null
+    setSelectedMeasurement: (
+      value: SetStateAction<InspectMeasurement | null>
+    ) => void
+    heldDistances: DistanceOverlay[]
+    setHeldDistances: (value: SetStateAction<DistanceOverlay[]>) => void
+  }
+  guides: {
+    guides: Guide[]
+    setGuides: (value: SetStateAction<Guide[]>) => void
+    selectedGuideIds: string[]
+    setSelectedGuideIds: (value: SetStateAction<string[]>) => void
+    draggingGuideId: string | null
+    setDraggingGuideId: (value: SetStateAction<string | null>) => void
+  }
+  arrows: {
+    arrows: Arrow[]
+    setArrows: (value: SetStateAction<Arrow[]>) => void
+    selectedArrowIds: string[]
+    setSelectedArrowIds: (value: SetStateAction<string[]>) => void
+  }
+  text: {
+    textAnnotations: TextAnnotation[]
+    setTextAnnotations: (value: SetStateAction<TextAnnotation[]>) => void
+  }
+  pen: {
+    penStrokes: PenStroke[]
+    setPenStrokes: (value: SetStateAction<PenStroke[]>) => void
+    selectedPenStrokeIds: string[]
+    setSelectedPenStrokeIds: (value: SetStateAction<string[]>) => void
+  }
+  comments: {
+    comments: CommentThread[]
+    setComments: (value: SetStateAction<CommentThread[]>) => void
+  }
+  layoutGuides: {
+    layoutGuides: LayoutGuide[]
+    setLayoutGuides: (value: SetStateAction<LayoutGuide[]>) => void
+  }
+  transient: {
+    setStart: (value: SetStateAction<{ x: number; y: number } | null>) => void
+    setEnd: (value: SetStateAction<{ x: number; y: number } | null>) => void
+    setIsDragging: (value: SetStateAction<boolean>) => void
+    setGuidePreview: (
+      value: SetStateAction<{
+        orientation: "vertical" | "horizontal"
+        position: number
+      } | null>
+    ) => void
+    setHoverRect: (
+      value: SetStateAction<{
+        left: number
+        top: number
+        width: number
+        height: number
+      } | null>
+    ) => void
+    setHoverElement: (value: Element | null) => void
+    setSelectedElement: (value: Element | null) => void
+    clearSelectionRect: () => void
+  }
+}
+
+const HISTORY_LIMIT = 50
+
+export const useMesurerHistory = ({
+  toggles,
+  measurements,
+  guides,
+  arrows,
+  text,
+  pen,
+  comments,
+  layoutGuides,
+  transient,
+}: UseMesurerHistoryArgs) => {
+  const {
+    enabled,
+    setEnabled,
+    toolMode,
+    setToolMode,
+    guideOrientation,
+    setGuideOrientation,
+  } = toggles
+  const {
+    measurements: measurementEntries,
+    setMeasurements,
+    activeMeasurement,
+    setActiveMeasurement,
+    selectedMeasurements,
+    setSelectedMeasurements,
+    selectedMeasurement,
+    setSelectedMeasurement,
+    heldDistances,
+    setHeldDistances,
+  } = measurements
+  const {
+    guides: guideEntries,
+    setGuides,
+    selectedGuideIds,
+    setSelectedGuideIds,
+    draggingGuideId,
+    setDraggingGuideId,
+  } = guides
+  const {
+    setStart,
+    setEnd,
+    setIsDragging,
+    setGuidePreview,
+    setHoverRect,
+    setHoverElement,
+    setSelectedElement,
+    clearSelectionRect,
+  } = transient
+  const { arrows: arrowEntries, setArrows, selectedArrowIds, setSelectedArrowIds } = arrows
+  const { textAnnotations, setTextAnnotations } = text
+  const { penStrokes, setPenStrokes, selectedPenStrokeIds, setSelectedPenStrokeIds } = pen
+  const { comments: commentEntries, setComments } = comments
+  const { layoutGuides: layoutGuideEntries, setLayoutGuides } = layoutGuides
+
+  const historyRef = useRef<MesurerSnapshot[]>([])
+  const futureRef = useRef<MesurerSnapshot[]>([])
+  const historySignatureRef = useRef<string | null>(null)
+
+  const captureSnapshot = useCallback((): MesurerSnapshot => {
+    return {
+      enabled,
+      toolMode,
+      guideOrientation,
+      measurements: [...measurementEntries],
+      activeMeasurement,
+      selectedMeasurements: [...selectedMeasurements],
+      selectedMeasurement,
+      heldDistances: [...heldDistances],
+      guides: [...guideEntries],
+      selectedGuideIds: [...selectedGuideIds],
+      draggingGuideId,
+      arrows: [...arrowEntries],
+      selectedArrowIds: [...selectedArrowIds],
+      textAnnotations: [...textAnnotations],
+      penStrokes: [...penStrokes],
+      selectedPenStrokeIds: [...selectedPenStrokeIds],
+      comments: [...commentEntries],
+      layoutGuides: [...layoutGuideEntries],
+    }
+  }, [
+    activeMeasurement,
+    draggingGuideId,
+    enabled,
+    guideOrientation,
+    guideEntries,
+    heldDistances,
+    measurementEntries,
+    selectedGuideIds,
+    selectedMeasurement,
+    selectedMeasurements,
+    toolMode,
+    arrowEntries,
+    selectedArrowIds,
+    textAnnotations,
+    penStrokes,
+    selectedPenStrokeIds,
+    commentEntries,
+    layoutGuideEntries,
+  ])
+
+  const getSnapshotSignature = useCallback((snapshot: MesurerSnapshot) => {
+    const serializeRect = (rect: {
+      left: number
+      top: number
+      width: number
+      height: number
+    }) =>
+      `${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.width)}:${Math.round(rect.height)}`
+    return [
+      snapshot.enabled ? "1" : "0",
+      snapshot.toolMode,
+      snapshot.guideOrientation,
+      snapshot.measurements
+        .map((item) => `${item.id}@${serializeRect(item.rect)}`)
+        .join(","),
+      snapshot.activeMeasurement
+        ? `${snapshot.activeMeasurement.id}@${serializeRect(snapshot.activeMeasurement.rect)}`
+        : "",
+      snapshot.selectedMeasurements
+        .map((item) => `${item.id}@${serializeRect(item.rect)}`)
+        .join(","),
+      snapshot.selectedMeasurement
+        ? `${snapshot.selectedMeasurement.id}@${serializeRect(snapshot.selectedMeasurement.rect)}`
+        : "",
+      snapshot.heldDistances.map((item) => item.id).join(","),
+      snapshot.guides.map((item) => `${item.id}:${item.position}`).join(","),
+      snapshot.selectedGuideIds.join(","),
+      snapshot.draggingGuideId ?? "",
+      snapshot.arrows.map((arrow) => `${arrow.id}:${arrow.start.x},${arrow.start.y},${arrow.control?.x ?? ""},${arrow.control?.y ?? ""},${arrow.end.x},${arrow.end.y}`).join(","),
+      snapshot.selectedArrowIds.join(","),
+      snapshot.textAnnotations.map((item) => `${item.id}:${item.x},${item.y},${item.scale ?? ""},${item.rotation ?? ""},${item.boxWidth ?? ""}:${item.text}`).join(","),
+      snapshot.penStrokes.map((stroke) => `${stroke.id}:${stroke.rotation ?? ""}:${stroke.points.map((point) => `${point.x},${point.y}`).join(";")}`).join(","),
+      snapshot.selectedPenStrokeIds.join(","),
+      snapshot.comments.map((comment) => `${comment.id}:${comment.status}:${comment.messages.map((message) => `${message.id}:${message.text}`).join(",")}`).join(","),
+      snapshot.layoutGuides.map((guide) => `${guide.id}:${guide.kind}:${guide.visible}:${guide.color}:${guide.opacity}:${guide.count}:${guide.size}:${guide.gutter}:${guide.offset}:${guide.align}`).join(","),
+    ].join("|")
+  }, [])
+
+  const recordSnapshot = useCallback(() => {
+    const snapshot = captureSnapshot()
+    const signature = getSnapshotSignature(snapshot)
+    if (historySignatureRef.current === signature) return
+    historyRef.current.push(snapshot)
+    futureRef.current = []
+    historySignatureRef.current = signature
+    if (historyRef.current.length > HISTORY_LIMIT) {
+      historyRef.current.shift()
+    }
+  }, [captureSnapshot, getSnapshotSignature])
+
+  const restoreSnapshot = useCallback(
+    (snapshot: MesurerSnapshot) => {
+      setEnabled(snapshot.enabled)
+      setToolMode(snapshot.toolMode)
+      setGuideOrientation(snapshot.guideOrientation)
+      setMeasurements(snapshot.measurements)
+      setActiveMeasurement(snapshot.activeMeasurement)
+      setSelectedMeasurements(snapshot.selectedMeasurements)
+      setSelectedMeasurement(snapshot.selectedMeasurement)
+      setHeldDistances(snapshot.heldDistances)
+      setGuides(snapshot.guides)
+      setSelectedGuideIds(snapshot.selectedGuideIds)
+      setDraggingGuideId(snapshot.draggingGuideId)
+      setArrows(snapshot.arrows)
+      setSelectedArrowIds(snapshot.selectedArrowIds)
+      setTextAnnotations(snapshot.textAnnotations)
+      setPenStrokes(snapshot.penStrokes)
+      setSelectedPenStrokeIds(snapshot.selectedPenStrokeIds)
+      setComments(snapshot.comments)
+      setLayoutGuides(snapshot.layoutGuides)
+      setStart(null)
+      setEnd(null)
+      setIsDragging(false)
+      setGuidePreview(null)
+      setHoverRect(null)
+      setHoverElement(null)
+      clearSelectionRect()
+      const nextSelectedElement =
+        snapshot.selectedMeasurement?.elementRef ??
+        snapshot.selectedMeasurements[snapshot.selectedMeasurements.length - 1]
+          ?.elementRef ??
+        null
+      setSelectedElement(nextSelectedElement)
+    },
+    [
+      clearSelectionRect,
+      setActiveMeasurement,
+      setDraggingGuideId,
+      setEnabled,
+      setEnd,
+      setGuideOrientation,
+      setGuidePreview,
+      setGuides,
+      setHeldDistances,
+      setHoverRect,
+      setIsDragging,
+      setMeasurements,
+      setSelectedGuideIds,
+      setSelectedMeasurement,
+      setSelectedMeasurements,
+      setSelectedElement,
+      setStart,
+      setToolMode,
+      setHoverElement,
+      setArrows,
+      setSelectedArrowIds,
+      setTextAnnotations,
+      setPenStrokes,
+      setSelectedPenStrokeIds,
+      setComments,
+      setLayoutGuides,
+    ]
+  )
+
+  const undo = useCallback(() => {
+    const previousSnapshot = historyRef.current.pop()
+    if (!previousSnapshot) return
+    const currentSnapshot = captureSnapshot()
+    futureRef.current.push(currentSnapshot)
+    if (futureRef.current.length > HISTORY_LIMIT) {
+      futureRef.current.shift()
+    }
+    historySignatureRef.current = null
+    restoreSnapshot(previousSnapshot)
+  }, [captureSnapshot, restoreSnapshot])
+
+  const redo = useCallback(() => {
+    const nextSnapshot = futureRef.current.pop()
+    if (!nextSnapshot) return
+    historyRef.current.push(captureSnapshot())
+    if (historyRef.current.length > HISTORY_LIMIT) {
+      historyRef.current.shift()
+    }
+    historySignatureRef.current = null
+    restoreSnapshot(nextSnapshot)
+  }, [captureSnapshot, restoreSnapshot])
+
+  const setToolModeWithHistory = useCallback(
+    (value: SetStateAction<ToolMode>) => {
+      setToolMode((prev) => {
+        const next = typeof value === "function" ? value(prev) : value
+        if (next === prev) return prev
+        recordSnapshot()
+        return next
+      })
+    },
+    [recordSnapshot, setToolMode]
+  )
+
+  const setGuideOrientationWithHistory = useCallback(
+    (value: SetStateAction<GuideOrientation>) => {
+      setGuideOrientation((prev) => {
+        const next = typeof value === "function" ? value(prev) : value
+        if (next === prev) return prev
+        recordSnapshot()
+        return next
+      })
+    },
+    [recordSnapshot, setGuideOrientation]
+  )
+
+  const setEnabledWithHistory = useCallback(
+    (value: SetStateAction<boolean>) => {
+      setEnabled((prev) => {
+        const next = typeof value === "function" ? value(prev) : value
+        if (next === prev) return prev
+        recordSnapshot()
+        return next
+      })
+    },
+    [recordSnapshot, setEnabled]
+  )
+
+  const createActionCommit = useCallback(() => {
+    let committed = false
+    return () => {
+      if (committed) return
+      recordSnapshot()
+      committed = true
+    }
+  }, [recordSnapshot])
+
+  return {
+    recordSnapshot,
+    createActionCommit,
+    setToolModeWithHistory,
+    setGuideOrientationWithHistory,
+    setEnabledWithHistory,
+    undo,
+    redo,
+  }
+}
