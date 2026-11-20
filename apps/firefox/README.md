@@ -20,15 +20,14 @@ There is no public build — install it by building it yourself, as below.
 git clone https://github.com/skrypt-nl/mesurer-firefox.git
 cd mesurer-firefox
 pnpm install
-pnpm -C packages/mesurer build     # shared package first
-pnpm -C apps/firefox build
+pnpm -C apps/firefox build         # builds the shared package first
 ```
 
 The extension is now in `apps/firefox/dist/`.
 
-> Note: build the shared package with `pnpm -C packages/mesurer build`, not
-> `pnpm --filter mesurer build` — the repo root package is also named
-> `mesurer`, so the filter resolves to the root and drags the site build in.
+> Note: use `pnpm -C <dir>`, not `pnpm --filter mesurer` — the repo root
+> package is also named `mesurer`, so the filter resolves to the root and drags
+> the site build in.
 
 ### Install in Firefox
 
@@ -70,26 +69,44 @@ Click the Mesurer button in the Firefox toolbar to turn it on for the current
 tab; click it again to turn it off (pin the button via the puzzle-piece menu
 if hidden). Per-tab: nothing runs until you click.
 
-Once active, hover elements to measure and use the on-page toolbar to switch
-tools. Hotkeys: `m` toggle measuring, `s` select, `a` text inspector, `g`
-guides, `x` x-ray, `r` rulers, `Esc` clear all, `⌘Z`/`⌘⇧Z` undo/redo.
+Once active, use the on-page toolbar to inspect, measure, annotate, take
+screenshots and record video; hover its buttons for keyboard shortcuts.
+
+Firefox will ask for access to all websites on install: Mesurer restores itself
+on reload and captures screenshots/recordings, which Firefox only allows with
+that permission.
 
 ## How the port works
 
 This app contains **no copied source code**. It is a thin build overlay on top of
 the upstream Chrome extension:
 
-- `tsup.config.ts` bundles `../extension/src/background.ts` and
-  `../extension/src/content.tsx` directly (the `chrome.*` namespace works in
-  Firefox, so the sources need no changes).
+- `tsup.config.ts` mirrors `../extension/tsup.config.ts` and bundles the
+  upstream sources in `../extension/src/` directly (the `chrome.*` namespace
+  works in Firefox, so they need no changes).
 - `scripts/generate-manifest.mjs` reads the upstream
-  `../extension/manifest.base.json` and merges `manifest.firefox.json` on top.
-- Icons are copied from `../extension/icons`.
+  `../extension/manifest.base.json`, merges `manifest.firefox.json` on top, and
+  copies icons, upstream's HTML pages and the package stylesheet.
 
-Firefox-specific manifest changes (all in `manifest.firefox.json`):
+Only two source files are Firefox's own, both for video recording, which
+upstream builds on Chrome-only APIs:
+
+- `src/chrome-polyfill.ts` — loaded before upstream's background
+  (`src/background.ts`). Polyfills `chrome.offscreen` (an iframe inside
+  Firefox's event-page background) and `chrome.tabCapture` (the "stream id" is
+  the tab id).
+- `src/offscreen-recording.ts` — replaces upstream's recorder with the same
+  messages: Firefox has no tab capture stream, so it records frames from
+  `tabs.captureVisibleTab` (~30 fps) and saves to upstream's recording store.
+
+Firefox-specific manifest changes:
 
 - `background.scripts` instead of `background.service_worker` — Firefox runs
   MV3 backgrounds as event pages, not service workers.
+- `offscreen`/`tabCapture` permissions dropped (polyfilled instead), and
+  `<all_urls>` added to `host_permissions` — Firefox's `captureVisibleTab`
+  doesn't accept `http(s)://*/*` patterns.
+- `name` shortened to "Mesurer" (AMO caps names at 50 characters).
 - `browser_specific_settings.gecko`: add-on id, `strict_min_version` (128.0),
   and `data_collection_permissions` (`required: ["none"]`, per
   [PRIVACY.md](../../packages/mesurer/PRIVACY.md) — required for AMO
@@ -105,7 +122,7 @@ git remote add upstream https://github.com/ibelick/mesurer.git  # once
 git fetch upstream
 git merge upstream/main
 pnpm install
-pnpm -C packages/mesurer build && pnpm -C apps/firefox build
+pnpm -C apps/firefox build
 ```
 
 Merges are conflict-free by construction (upstream never touches
@@ -113,6 +130,10 @@ Merges are conflict-free by construction (upstream never touches
 After a merge, the build catches drift:
 
 - new/changed source files in `apps/extension/src` are picked up automatically;
+- new upstream build entries or `define`s in `apps/extension/tsup.config.ts`
+  must be mirrored in ours — diff the two after a sync;
+- changes to upstream's `src/offscreen-recording.ts` or recording messages may
+  need porting to `src/offscreen-recording.ts`;
 - new `background` manifest keys upstream make `generate-manifest.mjs` throw so
   the override can be updated deliberately;
 - other new manifest keys (permissions, etc.) merge through automatically —

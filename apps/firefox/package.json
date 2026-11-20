@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsup && node scripts/generate-manifest.mjs",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && pnpm --dir ../../packages/mesurer build && tsup && node scripts/generate-manifest.mjs",
     "package": "pnpm build && web-ext build --source-dir dist --artifacts-dir artifacts --overwrite-dest",
     "lint:ext": "pnpm build && web-ext lint --source-dir dist",
     "start": "web-ext run --source-dir dist"
